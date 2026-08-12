@@ -1,0 +1,99 @@
+{
+  "说明": "严格微调对比看基础模型与 LoRA；API 教师仅作能力上限参考。",
+  "测试集": "data/evaluation/test.jsonl",
+  "结果": {
+    "本地基础模型": {
+      "模型": "本地基础模型",
+      "样本数": 12,
+      "JSON_SQL提取率": 1.0,
+      "SQL可执行率": 0.9167,
+      "执行结果正确率": 0.3333,
+      "Agent首次成功率": 0.8333,
+      "Agent重试率": 0.1667,
+      "模型调用次数": 14,
+      "总耗时秒": 279.46,
+      "平均每题秒": 23.29,
+      "典型错误": [
+        {
+          "id": "test_refund_orders",
+          "问题": "列出退款中的订单编号、日期和金额",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT order_id, order_date, total_amount FROM orders WHERE status = '退款中' ORDER BY order_date;",
+          "预测SQL": "SELECT o.order_id, o.order_date, o.total_amount FROM orders AS o INNER JOIN order_items AS oi ON o.order_id = oi.order_id WHERE o.status = 'refunded';"
+        },
+        {
+          "id": "test_user_order_count",
+          "问题": "统计每位用户有多少个订单，没有订单的用户也要显示",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT u.name, COUNT(o.order_id) AS order_count FROM users u LEFT JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id, u.name ORDER BY order_count DESC, u.user_id;",
+          "预测SQL": "SELECT u.user_id, COUNT(o.order_id) AS num_orders FROM users u LEFT JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id;"
+        },
+        {
+          "id": "test_category_units",
+          "问题": "统计各商品分类累计卖出的件数",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT p.category, SUM(oi.quantity) AS sold_quantity FROM products p JOIN order_items oi ON p.product_id = oi.product_id GROUP BY p.category ORDER BY sold_quantity DESC;",
+          "预测SQL": "SELECT p.category, COUNT(i.item_id) AS sold_count FROM products p JOIN order_items i ON p.product_id = i.product_id GROUP BY p.category ORDER BY sold_count DESC;"
+        },
+        {
+          "id": "test_completed_month_count",
+          "问题": "按月份统计已完成订单数",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT DATE_FORMAT(order_date, '%Y-%m') AS order_month, COUNT(*) AS order_count FROM orders WHERE status = '已完成' GROUP BY order_month ORDER BY order_month;",
+          "预测SQL": "SELECT DATE_FORMAT(order_date, '%Y-%m') AS month, COUNT(*) AS completed_orders FROM orders WHERE status = 'completed' GROUP BY month;"
+        },
+        {
+          "id": "test_high_value_users",
+          "问题": "找出订单总金额超过 500 元的用户",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT u.name, SUM(o.total_amount) AS total_spend FROM users u JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id, u.name HAVING total_spend > 500 ORDER BY total_spend DESC;",
+          "预测SQL": "SELECT u.name FROM users u INNER JOIN orders o ON u.user_id = o.user_id WHERE o.total_amount > 500;"
+        }
+      ]
+    },
+    "LoRA学生模型": {
+      "模型": "LoRA学生模型",
+      "样本数": 12,
+      "JSON_SQL提取率": 1.0,
+      "SQL可执行率": 0.8333,
+      "执行结果正确率": 0.6667,
+      "Agent首次成功率": 0.8333,
+      "Agent重试率": 0.1667,
+      "模型调用次数": 14,
+      "总耗时秒": 308.48,
+      "平均每题秒": 25.71,
+      "典型错误": [
+        {
+          "id": "test_refund_orders",
+          "问题": "列出退款中的订单编号、日期和金额",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT order_id, order_date, total_amount FROM orders WHERE status = '退款中' ORDER BY order_date;",
+          "预测SQL": "SELECT order_id, order_date, total_amount FROM orders WHERE status = '已完成' ORDER BY order_date;"
+        },
+        {
+          "id": "test_category_units",
+          "问题": "统计各商品分类累计卖出的件数",
+          "阶段": "生成或执行失败",
+          "首次错误": "(1054, \"Unknown column 'category' in 'field list'\")",
+          "重试错误": "(1054, \"Unknown column 'category' in 'field list'\")",
+          "原始输出": "{\"sql\":\"SELECT category, COUNT(*) AS sold_quantity FROM order_items GROUP BY category ORDER BY sold_quantity DESC;\"}"
+        },
+        {
+          "id": "test_high_value_users",
+          "问题": "找出订单总金额超过 500 元的用户",
+          "阶段": "结果不一致",
+          "期望SQL": "SELECT u.name, SUM(o.total_amount) AS total_spend FROM users u JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id, u.name HAVING total_spend > 500 ORDER BY total_spend DESC;",
+          "预测SQL": "SELECT u.name FROM users u JOIN orders o ON u.user_id = o.user_id WHERE o.total_amount > 500 ORDER BY u.register_date;"
+        },
+        {
+          "id": "test_product_order_count",
+          "问题": "统计每个商品出现在多少个不同订单中",
+          "阶段": "生成或执行失败",
+          "首次错误": "(1054, \"Unknown column 'o.order_id' in 'field list'\")",
+          "重试错误": "(1054, \"Unknown column 'o.order_id' in 'field list'\")",
+          "原始输出": "{\"sql\":\"SELECT p.product_name, COUNT(DISTINCT o.order_id) AS order_count FROM order_items oi JOIN products p ON oi.product_id = p.product_id GROUP BY p.product_id, p.product_name ORDER BY order_count DESC;\"}"
+        }
+      ]
+    }
+  }
+}
