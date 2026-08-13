@@ -1,8 +1,0 @@
-{
-  "samples": 71,
-  "epochs": 2,
-  "max_length": 512,
-  "gradient_accumulation": 4,
-  "optimizer_updates": 36,
-  "final_average_loss": 0.0038523245039215628
-}
