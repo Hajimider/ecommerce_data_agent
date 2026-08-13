@@ -2,15 +2,16 @@
 
 ## 项目说明
 
-这是一个以本地 Qwen LoRA 微调和黑盒知识蒸馏为主线的中文 Text-to-SQL 项目。强 API 模型充当教师，只生成标准问题的语义等价改写；API 裁判批量检查语义一致性，候选样本通过格式、安全、去重、置信度和 MySQL 执行校验后训练本地学生模型。最后在独立人工测试集上比较本地基础模型、LoRA 学生模型和 API 教师模型，并把 LoRA 学生接入电商数据分析 Agent 做落地演示。
+这是一个以本地 Qwen LoRA SFT 微调为主的中文 Text-to-SQL 项目。项目使用独立人工测试集比较同一本地基础模型与 LoRA 模型，并将微调模型接入单个 Text-to-SQL Agent，完成业务知识检索、SQL 生成、安全校验、MySQL 执行、一次错误修复和结果展示。Plotly 总览页用于展示固定业务指标。
 
-项目重点是完整走通“教师数据生成 → LoRA 训练 → 同模型微调前后评估 → Agent 应用”的微调全过程。Agent 不是主项目本身，而是展示微调模型如何进入真实链路：业务知识检索、SQL 规划、安全检查、数据库执行、一次错误修复和结果解释。
+项目核心链路是“监督数据 → Qwen LoRA 训练 → 同模型微调前后评估 → 单个 Text-to-SQL Agent 应用”。Agent 是微调模型的落地层，不拆分为 Planner、SQL、Review 等多个 Agent。API 教师、API 裁判和 API 对照评估均为可选增强：没有 API 时仍可使用人工种子完成训练、评估和本地 Agent 运行。
 
-项目提供两种启动方式：
+项目提供四种启动方式：
 
-- `run_agent.py`：适合 IDE 一键运行，模型、API、MySQL 和测试问题集中配置。
-- `run_finetuning.py`：适合 IDE 一键生成数据、训练和评估，参数集中配置。
+- `run_agent.py`：IDE 一键运行入口，模型、API、MySQL 和测试问题集中配置；敏感值留空并从 `.env` 读取。
+- `run_finetuning.py`：IDE 一键生成数据、训练和评估入口；敏感值留空并从 `.env` 读取。
 - `app.py`：适合命令行单题测试、连续提问和无模型自检。
+- `run_visualization.py`：适合 IDE 一键生成 Plotly 交互式 HTML 图表。
 
 项目使用固定教学数据库，只允许单条 `SELECT` 查询，不应连接生产数据库或处理真实敏感业务数据。
 
@@ -23,9 +24,31 @@
 | 大模型可能生成写操作或多条语句 | 执行前拒绝非 `SELECT`、危险关键字、注释和多语句 | 明确的安全校验错误 |
 | SQL 能执行但不方便阅读 | 执行使用规范化原始 SQL，终端使用多行缩进格式展示 | 美化后的 SQL |
 | API 不可用或不希望上传数据 | `LLM_MODE` 可切换 API 与本地 Qwen，本地模式不发送问题和结果到云端 | 当前模型配置和本地加载日志 |
-| 小模型能力不足但本机无法训练大模型 | 强 API 模型只改写人工标准问题，沿用已验证 SQL 标签训练本地学生模型 | 合成 JSONL、过滤统计和三方评测报告；当前项目主线 |
+| 人工训练问法数量有限 | 可选使用 API 只改写人工标准问题，沿用已验证 SQL 标签扩充数据 | 合成 JSONL、过滤统计和可选三方评测报告 |
 
 项目输出用于学习和算法工程展示，不构成真实经营决策建议。
+
+## 可视化链路
+
+项目使用固定 MySQL 教学库作为图表数据源。可视化脚本执行稳定的只读 SQL，将分类销售额、城市销售额、订单状态、库存金额和月度趋势合并到 `outputs/charts/dashboard.html`，不再分别生成多个图表页面。
+
+在 IDE 中直接运行 `run_visualization.py`。文件顶部提供以下配置：
+
+```python
+OUTPUT_DIR = "outputs/charts"  # 图表输出目录
+COMPLETED_STATUS = "已完成"    # 销售统计采用的订单状态
+OPEN_BROWSER = True            # 生成后是否自动打开本地总览页面
+```
+
+当 `OPEN_BROWSER = True` 时，Windows 会通过本地 HTML 文件关联打开 `dashboard.html`。如果默认浏览器仍显示 MSN 等新标签页主页，图表并未丢失，可直接双击 `outputs/charts/dashboard.html` 查看。设置为 `False` 时只生成文件，不自动启动浏览器。
+
+也可以使用命令行生成并打开：
+
+```powershell
+python visualization.py --output-dir outputs/charts --open-browser
+```
+
+详细步骤见 `docs/Plotly使用说明.md`。
 
 ## 数据集
 
@@ -56,7 +79,7 @@
   -> 终端展示知识来源、格式化 SQL、结果表格和重试状态
 ```
 
-合成数据与知识蒸馏链路：
+可选的合成数据与知识蒸馏链路：
 
 ```text
 固定数据库、业务规则和问题模板
@@ -258,7 +281,7 @@ python scripts/evaluate_finetuning.py --model-path path/to/local-model --adapter
 
 使用 API 教师时，IDE 中依次选择 `generate`、`train`、`evaluate`，不再需要 `apply_reviews`。也可以选择 `all` 自动连续执行，但分步运行更方便观察裁判通过率和定位错误。训练脚本不会覆盖非空的适配器目录；重复实验需要填写新的 `ADAPTER_OUTPUT`。
 
-## 大模型 Agent
+## 单个 Text-to-SQL Agent
 
 模型只负责生成 SQL 计划和解释已执行结果。知识检索、SQL 安全校验、数据库连接、错误重试和输出格式都由本项目控制。
 
@@ -266,12 +289,11 @@ python scripts/evaluate_finetuning.py --model-path path/to/local-model --adapter
 
 | 方案 | 推荐度 | 适用场景 | 说明 |
 | --- | --- | --- | --- |
-| 云端 API | 推荐 | Agent 演示、追求生成质量和启动速度 | 本机不加载模型；会发送问题、业务知识和查询结果，并产生调用费用。 |
-| 本地 Qwen2.5-1.5B-Instruct | 推荐用于学习 | 离线流程、本地模型接口、CPU 推理 | 已完成最小生成验证；复杂 SQL 和结果解释弱于较强 API。 |
-| 本地 Qwen + LoRA | 推荐用于微调实验 | 比较微调前后执行正确率 | 适配器必须与基础模型和提示模板匹配，不能只看输出是否更简洁。 |
-| API 教师 + API 裁判 + 本地 LoRA 学生 | 当前主线 | 合成数据、自动质量过滤、黑盒知识蒸馏 | 推荐教师与裁判使用不同模型，并保留独立测试集。 |
+| 本地 Qwen + LoRA | 项目主线 | 微调效果验证和 Agent 落地 | 适配器必须与基础模型和提示模板匹配，以执行结果正确率评价效果。 |
+| 本地 Qwen2.5-1.5B-Instruct | 必需对照 | 微调前基线、离线推理 | 与 LoRA 使用同一提示模板和测试集，保证对比有效。 |
+| 云端 API | 可选 | 数据扩充、自动审核、能力参考或临时推理 | 会产生费用并发送数据，不影响本地微调主流程运行。 |
 
-### 云端 API
+### 可选云端 API
 
 推荐直接修改根目录 `run_agent.py` 顶部配置区：
 
@@ -298,7 +320,7 @@ LOCAL_MAX_NEW_TOKENS = "256"
 
 `LOCAL_ADAPTER_PATH` 留空时使用基础模型；填写兼容的 LoRA 目录后使用微调模型。本地模型只在第一次调用时加载，API 模式不会导入模型权重。
 
-### 合成数据与知识蒸馏
+### 可选合成数据与知识蒸馏
 
 API 在微调项目中的价值不只是线上推理。较强 API 在本项目中充当教师模型，为人工标准问题生成多种等价问法；另一个 API 模型可充当裁判，批量判断语义一致性。标准 SQL 始终来自人工种子，避免教师自由编造字段和关联。本地 Qwen 是学生模型，通过 LoRA 学习经过筛选的数据。
 
@@ -333,16 +355,16 @@ API 在微调项目中的价值不只是线上推理。较强 API 在本项目�
 3. 打开 `run_agent.py`，设置 `LLM_MODE` 和对应模型参数。
 4. 修改 `QUESTION`，直接运行 `run_agent.py`。
 
-不要把本机解释器、模型绝对路径或真实 API Key 写入共享运行配置。`run_agent.py` 是本机入口并已被 `.gitignore` 忽略；可分发模板为 `run_agent.example.py`。
+不要把本机解释器、模型绝对路径或真实 API Key 写入共享运行配置。两个入口的敏感配置应保持为空，真实值只放在不会提交的 `.env` 中。
 
 ## 项目结构
 
 ```text
 ecommerce_data_agent/
-├── run_agent.py             # 本机 IDE 一键入口，不提交真实配置
-├── run_agent.example.py     # 可分发启动配置模板
-├── run_finetuning.py        # 本机 IDE 一键微调入口，不提交真实配置
-├── run_finetuning.example.py # 可分发微调入口模板
+├── run_agent.py             # IDE 一键 Agent 入口，敏感值从 .env 读取
+├── run_finetuning.py        # IDE 一键微调入口，敏感值从 .env 读取
+├── run_visualization.py     # IDE 一键生成 Plotly 图表
+├── visualization.py         # 固定 SQL 汇总和 Plotly HTML 导出
 ├── app.py                   # 命令行入口、连续提问和自检
 ├── agent.py                 # SQL 规划、工具调用、一次修复和结果解释
 ├── knowledge.py             # 表结构和指标口径的轻量检索
@@ -359,12 +381,10 @@ ecommerce_data_agent/
 ├── data/
 │   ├── distillation/         # 候选数据和已验证训练集
 │   └── evaluation/           # 独立人工测试集
-├── outputs/                  # LoRA 适配器和评估报告
+├── outputs/                  # 小型评估报告；模型权重和图表由本机生成
 ├── docs/
-│   └── 设计说明.md           # 中文架构说明
-├── task_plan.md             # 项目实施计划
-├── findings.md              # 项目发现记录
-├── progress.md              # 验证与修改记录
+│   ├── 设计说明.md           # 中文架构说明
+│   └── Plotly使用说明.md     # Plotly 图表生成和查看说明
 └── README.md
 ```
 
@@ -378,15 +398,15 @@ ecommerce_data_agent/
 data/distillation/candidates.jsonl       # API 教师模型原始候选
 data/distillation/verified_train.jsonl   # 去重且标准 SQL 执行校验后的训练集
 data/evaluation/test.jsonl               # 与训练集隔离的测试题
-outputs/student_lora*/                    # 不同实验的本地学生模型 LoRA 适配器
-outputs/student_lora*/training_summary.json # 训练样本、轮数、更新次数和损失摘要
 outputs/evaluation_epoch1.json            # epoch1 本地模型评测报告
 outputs/evaluation_epoch2.json            # epoch2 本地模型评测报告
 outputs/evaluation_epoch3.json            # epoch3 本地模型评测报告
 outputs/evaluation_epoch2_api_run*.json   # epoch2 的重复 API 三方评测报告
+outputs/student_lora*/                    # 运行训练后在本机生成，不提交 GitHub
+outputs/charts/dashboard.html             # 运行可视化后在本机生成，不提交 GitHub
 ```
 
-`candidates.jsonl` 保存人工种子、API 改写、裁判判决和拒绝原因；`verified_train.jsonl` 只保存人工种子与裁判高置信通过的改写；`test.jsonl` 包含 12 条独立人工测试题。本次实验已经生成多组 LoRA 适配器、训练摘要和评估报告；重新实验时应为 `ADAPTER_OUTPUT` 和 `EVALUATION_OUTPUT` 指定新的名称，避免覆盖历史结果。
+`candidates.jsonl` 保存人工种子、API 改写、裁判判决和拒绝原因；`verified_train.jsonl` 只保存人工种子与裁判高置信通过的改写；`test.jsonl` 包含 12 条独立人工测试题。仓库保留小型评估报告，LoRA 权重、训练摘要和 Plotly HTML 由脚本在本机重新生成，避免 Git 仓库体积过大。
 
 ## 测试
 
@@ -396,9 +416,10 @@ python scripts/generate_distillation_data.py --seed-only
 python scripts/prepare_evaluation_data.py
 python scripts/train_student.py --check-data
 python -m compileall .
+python visualization.py --self-test
 ```
 
-当前自检覆盖知识检索、只读 SQL 规范化、危险 SQL 拒绝、重复 JSON 提取、SQL 多行排版、训练数据结构和标准 SQL 执行。本次完整训练和推理评估已经由用户运行完成，README 直接采用 `outputs/evaluation_*.json` 和各适配器训练摘要中的结果，没有重复执行耗时任务。
+当前自检覆盖知识检索、只读 SQL 规范化、危险 SQL 拒绝、重复 JSON 提取、SQL 多行排版、训练数据结构和标准 SQL 执行。本次完整训练和推理评估已经完成，README 直接采用仓库中的 `outputs/evaluation_*.json` 结果。
 
 ## 局限
 

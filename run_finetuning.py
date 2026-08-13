@@ -1,4 +1,4 @@
-"""IDE 一键运行入口。复制为 run_finetuning.py 后修改本页顶部配置。"""
+"""本机 IDE 一键运行入口。修改本页顶部配置后直接运行。"""
 
 import os
 import subprocess
@@ -9,14 +9,14 @@ from pathlib import Path
 # 操作：generate（生成并自动审核）、train、evaluate、all；apply_reviews 仅用于可选人工覆盖。
 ACTION = "generate"
 
-# True：调用 API 教师生成改写；False：只使用 15 条人工种子做链路检查。
+# True：调用 API 教师和 API 裁判；False：只使用 15 条人工种子做链路检查。
 USE_API_TEACHER = True
 
 # 本地基础模型目录。留空时读取 .env 中的 LOCAL_MODEL_PATH。
 MODEL_PATH = ""
-ADAPTER_OUTPUT = "outputs/student_lora_epoch3"
+ADAPTER_OUTPUT = "outputs/student_lora"
 # 评估报告保存位置；每次实验建议使用不同文件名，避免覆盖历史结果。
-EVALUATION_OUTPUT = "outputs/evaluation_epoch2.json"
+EVALUATION_OUTPUT = "outputs/evaluation.json"
 EPOCHS = 2
 MAX_SAMPLES = 0  # 0 表示使用全部数据。
 VARIANTS_PER_SEED = 4
@@ -27,7 +27,7 @@ INCLUDE_API_IN_EVALUATION = False
 LLM_API_BASE = ""
 LLM_API_KEY = ""
 LLM_MODEL = ""
-# 裁判配置留空时复用上面的教师 API。
+# 裁判配置必须全部填写或全部留空；留空时复用教师 API。
 JUDGE_API_BASE = ""
 JUDGE_API_KEY = ""
 JUDGE_MODEL = ""

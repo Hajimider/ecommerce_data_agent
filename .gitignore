@@ -1,5 +1,10 @@
 .env
-run_agent.py
-run_finetuning.py
 __pycache__/
 *.pyc
+.idea/
+.vscode/
+outputs/student_lora*/
+outputs/charts/
+outputs/powerbi/
+outputs/evaluation.json
+outputs/evaluation_epoch4.json
