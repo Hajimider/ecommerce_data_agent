@@ -2,9 +2,9 @@
 
 ## 项目说明
 
-这是一个以本地 Qwen LoRA SFT 微调为主的中文 Text-to-SQL 项目。项目使用独立人工测试集比较同一本地基础模型与 LoRA 模型，并将微调模型接入单个 Text-to-SQL Agent，完成业务知识检索、SQL 生成、安全校验、MySQL 执行、一次错误修复和结果展示。Plotly 总览页用于展示固定业务指标。
+这是一个以本地 Qwen LoRA SFT 微调为主的中文 Text-to-SQL 项目。项目已接入 CSpider 公开中文跨数据库数据和自建电商领域数据，支持分别通过公开 SQLite dev 子集与独立 MySQL 测试集比较同一本地基础模型和 LoRA，并将微调模型接入单个 Text-to-SQL Agent。Agent 查询成功后会按结果结构自动生成并打开 Plotly 图表。
 
-项目核心链路是“监督数据 → Qwen LoRA 训练 → 同模型微调前后评估 → 单个 Text-to-SQL Agent 应用”。Agent 是微调模型的落地层，不拆分为 Planner、SQL、Review 等多个 Agent。API 教师、API 裁判和 API 对照评估均为可选增强：没有 API 时仍可使用人工种子完成训练、评估和本地 Agent 运行。
+项目核心链路是“公开与领域监督数据 → 固定训练快照 → Qwen LoRA 训练 → 同模型微调前后评估 → 单个 Text-to-SQL Agent 应用”。Agent 是微调模型的落地层，不拆分为 Planner、SQL、Review 等多个 Agent。API 教师、API 裁判和 API 对照评估均为可选增强：没有 API 时仍可使用 CSpider 与人工领域数据完成训练、评估和本地 Agent 运行。
 
 项目提供四种启动方式：
 
@@ -25,12 +25,23 @@
 | SQL 能执行但不方便阅读 | 执行使用规范化原始 SQL，终端使用多行缩进格式展示 | 美化后的 SQL |
 | API 不可用或不希望上传数据 | `LLM_MODE` 可切换 API 与本地 Qwen，本地模式不发送问题和结果到云端 | 当前模型配置和本地加载日志 |
 | 人工训练问法数量有限 | 可选使用 API 只改写人工标准问题，沿用已验证 SQL 标签扩充数据 | 合成 JSONL、过滤统计和可选三方评测报告 |
+| 自建小数据难以说明泛化能力 | 接入 CSpider 公开中文跨数据库基准，固定抽样并单独执行评测 | 数据快照哈希、公开子集 Base/LoRA 对照报告 |
 
 项目输出用于学习和算法工程展示，不构成真实经营决策建议。
 
 ## 可视化链路
 
-项目使用固定 MySQL 教学库作为图表数据源。可视化脚本执行稳定的只读 SQL，将分类销售额、城市销售额、订单状态、库存金额和月度趋势合并到 `outputs/charts/dashboard.html`，不再分别生成多个图表页面。
+项目提供两种可视化方式：`run_visualization.py` 将 5 个固定业务指标合并到 `outputs/charts/dashboard.html`；`run_agent.py` 在每次电商查询成功后，根据结果字段自动选择柱状图、折线图、饼图、散点图、指标卡或数据表，并在 `outputs/charts/queries/` 生成独立 HTML。
+
+自动图表在 `run_agent.py` 顶部配置，默认生成后立即打开本地文件：
+
+```python
+AUTO_CHART = True
+OPEN_CHART = True
+CHART_OUTPUT_DIR = "outputs/charts/queries"
+```
+
+自动选图由 Python 根据字段类型和结果结构完成，大模型不生成绘图代码。图表生成失败只会显示提示，不会影响已经完成的 SQL 查询和中文结论。
 
 在 IDE 中直接运行 `run_visualization.py`。文件顶部提供以下配置：
 
@@ -50,9 +61,34 @@ python visualization.py --output-dir outputs/charts --open-browser
 
 详细步骤见 `docs/Plotly使用说明.md`。
 
+可直接修改 `run_agent.py` 中的 `QUESTION` 测试：
+
+```text
+统计各商品分类的销售额并按销售额降序排列
+按城市统计已完成订单的销售额
+按月份统计全部订单金额
+统计每种订单状态的订单数量
+查询已完成订单中销量最高的 3 个商品
+查询库存少于 30 件的商品，按库存升序排列
+统计每位用户的订单总金额，按总金额降序排列
+计算已完成订单的平均金额
+```
+
 ## 数据集
 
-项目不下载外部数据集，复用固定的 `ecommerce_text_to_sql` MySQL 教学库。数据库由 Text-to-SQL 项目的初始化脚本创建。
+项目采用“CSpider 公开数据 + 电商领域数据”的双数据集设计。CSpider 提供中文问题、跨数据库表结构和标准 SQL，用于学习通用 SQL 结构并测试跨库泛化；固定的 `ecommerce_text_to_sql` MySQL 教学库用于学习中文业务状态值、关联路径和指标口径。两类数据使用不同数据库引擎分别评测，指标不混算。
+
+| 数据集 | 用途 | 默认实验规模 | 评测方式 |
+| --- | --- | ---: | --- |
+| CSpider | 公开跨数据库训练与泛化评测 | 训练 200 条、dev 50 条 | SQLite 轻量执行结果正确率 |
+| 电商领域训练集 | 领域口径和 MySQL 方言适配 | 当前文件 72 条 | 不直接作为测试集 |
+| 电商独立测试集 | 领域效果评测 | 12 条 | MySQL 执行结果正确率 |
+
+默认规模是适合本机 CPU 完整走通流程的可调子集，不代表 CSpider 官方全量榜单。`scripts/prepare_cspider.py` 使用固定随机种子抽样，训练摘要记录数据 SHA-256 和来源数量，避免再次出现不同实验误用不同训练快照的问题。CSpider 原始数据不重复分发，目录结构见 `data/public/cspider/README.md`。
+
+CSpider 的部分数据库表结构较长。训练编码器在超过 `MAX_LENGTH` 时会优先裁剪提示词中间的表结构，同时保留开头的系统规则、末尾的用户问题和完整标准 SQL；本次 272 条快照中有 19 条触发该处理。默认 `MAX_LENGTH=512` 兼顾本机内存与训练速度，无需为了避免截断直接提升到 1024 或更高。
+
+电商教学库包含：
 
 | 数据内容 | 数量 | 主要字段 |
 | --- | ---: | --- |
@@ -77,6 +113,7 @@ python visualization.py --output-dir outputs/charts --open-browser
   -> 首次失败时携带错误信息修复一次
   -> API 或本地 Qwen 读取查询结果并生成中文结论
   -> 终端展示知识来源、格式化 SQL、结果表格和重试状态
+  -> 按查询结果自动选择 Plotly 图表并打开本地 HTML
 ```
 
 可选的合成数据与知识蒸馏链路：
@@ -89,6 +126,17 @@ python visualization.py --output-dir outputs/charts --open-browser
   -> 保存合成训练集 / 独立人工测试集
   -> 本地 Qwen 基础模型训练 LoRA 学生模型
   -> 比较本地基础模型、LoRA 学生模型和 API 教师模型
+```
+
+公开数据微调与双评测链路：
+
+```text
+CSpider train 固定子集 + 已验证电商训练集
+  -> 生成带哈希的合并训练快照
+  -> 本地 Qwen LoRA SFT
+  -> CSpider dev 固定子集 SQLite 轻量执行评测
+  -> 电商独立测试集 MySQL 执行评测
+  -> 分别比较同一 Base 与 LoRA，不合并两类准确率
 ```
 
 ## 方法与训练
@@ -112,11 +160,11 @@ API 模式通过 OpenAI-compatible `/chat/completions` 接口调用云端模型�
 
 严格来说，让 API 生成问题改写叫“合成数据”；把经过自动质量过滤的数据用于训练本地学生模型，属于数据驱动的知识蒸馏，也常称黑盒蒸馏。名称并不代表数据天然可靠，语义偏离的改写同样会被学生模型学到，因此裁判不确定或返回异常时直接丢弃。
 
-项目已经完成合成数据生成、批量 API 裁判、LoRA 训练和自动评估。训练目标与 Agent 完全一致：输入同一套 `SQL_SYSTEM`、检索上下文和用户问题，只对 assistant 的 `{"sql":"SELECT ...;"}` 回答计算损失。本次实验的实际指标以各个 `outputs/evaluation_*.json` 报告为准，并重点比较同一基础模型加载 LoRA 前后的执行结果正确率。
+项目已经完成合成数据生成、批量 API 裁判、LoRA 训练和自动评估，并新增 CSpider 标准格式转换、固定抽样、合并训练快照和公开 dev 轻量执行评测。训练只对 assistant 的 `{"sql":"SELECT ...;"}` 回答计算损失。本次已有指标来自纯电商训练实验；接入 CSpider 后必须训练新适配器并生成新报告，不能沿用旧结果。
 
 ## 运行结果
 
-下面分为工程验证和一次已经完成的模型评估结果。评估使用与训练隔离的 12 条人工测试题；“执行结果正确率”按查询结果与标准 SQL 结果完全一致计算。
+下面分别记录已有的纯电商实验和 CSpider 公开子集实验。两类评测使用不同数据库、测试集和 SQL 方言，结果分别陈述，不合并为一个准确率。
 
 ### API 模式
 
@@ -140,6 +188,19 @@ API 模式通过 OpenAI-compatible `/chat/completions` 接口调用云端模型�
 | `app.py --self-test` | 通过 |
 
 本地最小生成验证只能证明模型能够加载和回答；本次独立测试集评估进一步给出了 Text-to-SQL 执行结果正确率、SQL 可执行率和 Agent 重试率。
+
+### CSpider 公开子集评估
+
+基于 200 条 CSpider 训练子集与 72 条电商领域样本训练 epoch2 适配器，并在固定随机种子抽取的 50 条 CSpider dev 子集上进行 SQLite 轻量执行评测：
+
+| 指标 | 本地基础模型 | LoRA 学生模型 | 变化 |
+| --- | ---: | ---: | ---: |
+| JSON/SQL 提取率 | 100.00% | 100.00% | 0.00 个百分点 |
+| SQL 可执行率 | 72.00% | 66.00% | -6.00 个百分点 |
+| 轻量执行结果正确率 | 46.00% | 48.00% | +2.00 个百分点 |
+| 平均每题耗时 | 19.44 秒 | 13.71 秒 | -5.73 秒 |
+
+该结果说明小规模混合训练带来了有限的执行正确率提升，但 SQL 可执行率下降，不能据此宣称模型泛化能力显著提高。典型错误仍集中在字段幻觉、关联遗漏、聚合条件错误和 SQLite/MySQL 函数混用，详细记录见 `outputs/evaluation_cspider_epoch2.json`。
 
 ### 微调链路
 
@@ -231,6 +292,13 @@ python scripts/prepare_evaluation_data.py
 python scripts/train_student.py --check-data
 ```
 
+准备 CSpider 原始数据后，生成固定公开子集和合并训练快照：
+
+```powershell
+python scripts/prepare_cspider.py --public-train-samples 200 --public-dev-samples 50 --seed 42
+python scripts/train_student.py --data-path data/training/cspider_ecommerce_train.jsonl --check-data
+```
+
 要调用 API 教师生成多样化问法，并让 API 裁判自动审核：
 
 ```powershell
@@ -268,18 +336,19 @@ python app.py --question "统计各商品分类的销售额并按销售额降序
 python app.py
 ```
 
-### 6. 运行知识蒸馏实验
+### 6. 运行公开数据与领域微调实验
 
 推荐在 `run_finetuning.py` 顶部设置 `ACTION` 后从 IDE 运行。也可以使用命令行：
 
 ```powershell
 python scripts/train_student.py --model-path path/to/local-model --epochs 1 --output-dir outputs/student_lora
 python scripts/evaluate_finetuning.py --model-path path/to/local-model --adapter-path outputs/student_lora
+python scripts/evaluate_cspider.py --model-path path/to/local-model --adapter-path outputs/student_lora
 ```
 
 需要把 API 教师加入能力上限对比时，在评估命令末尾加 `--include-api`。严格判断微调是否有效，只比较报告中的“本地基础模型”和“LoRA 学生模型”。
 
-使用 API 教师时，IDE 中依次选择 `generate`、`train`、`evaluate`，不再需要 `apply_reviews`。也可以选择 `all` 自动连续执行，但分步运行更方便观察裁判通过率和定位错误。训练脚本不会覆盖非空的适配器目录；重复实验需要填写新的 `ADAPTER_OUTPUT`。
+在 `run_finetuning.py` 中将 `USE_CSPIDER` 设为 `True`，依次选择 `prepare_public`、`train`、`evaluate`、`evaluate_public`，即可分别得到电商 MySQL 与 CSpider SQLite 报告。使用 API 教师时先执行 `generate`；不使用 API 时可直接从公开数据准备开始。`all` 会串行执行整条链路，初次运行更推荐分步观察。训练脚本不会覆盖非空适配器目录，重复实验需要填写新的 `ADAPTER_OUTPUT`。
 
 ## 单个 Text-to-SQL Agent
 
@@ -364,8 +433,8 @@ ecommerce_data_agent/
 ├── run_agent.py             # IDE 一键 Agent 入口，敏感值从 .env 读取
 ├── run_finetuning.py        # IDE 一键微调入口，敏感值从 .env 读取
 ├── run_visualization.py     # IDE 一键生成 Plotly 图表
-├── visualization.py         # 固定 SQL 汇总和 Plotly HTML 导出
-├── app.py                   # 命令行入口、连续提问和自检
+├── visualization.py         # 固定总览与单次查询的 Plotly HTML 导出
+├── app.py                   # 命令行入口、连续提问、自动图表和自检
 ├── agent.py                 # SQL 规划、工具调用、一次修复和结果解释
 ├── knowledge.py             # 表结构和指标口径的轻量检索
 ├── llm_client.py            # OpenAI-compatible API 与本地模型客户端
@@ -376,15 +445,20 @@ ecommerce_data_agent/
 │   ├── distillation_data.py          # 人工种子、独立测试题和 JSONL 工具
 │   ├── generate_distillation_data.py # API 改写、批量裁判、去重和执行过滤
 │   ├── prepare_evaluation_data.py    # 生成人工独立测试集
+│   ├── prepare_cspider.py             # CSpider 转换、固定抽样和训练快照
 │   ├── train_student.py              # CPU LoRA 学生模型训练
-│   └── evaluate_finetuning.py        # 基础/LoRA/API 三方执行评估
+│   ├── evaluate_finetuning.py        # 电商 Base/LoRA/API MySQL 评估
+│   └── evaluate_cspider.py           # CSpider Base/LoRA SQLite 评估
 ├── data/
 │   ├── distillation/         # 候选数据和已验证训练集
-│   └── evaluation/           # 独立人工测试集
+│   ├── public/cspider/       # CSpider 目录说明；原始数据不提交
+│   ├── training/             # 本机生成的固定合并训练快照
+│   └── evaluation/           # 电商与公开独立测试集
 ├── outputs/                  # 小型评估报告；模型权重和图表由本机生成
 ├── docs/
 │   ├── 设计说明.md           # 中文架构说明
-│   └── Plotly使用说明.md     # Plotly 图表生成和查看说明
+│   ├── Plotly使用说明.md     # Plotly 图表生成和查看说明
+│   └── 面试高频问题.md       # 一分钟介绍、问答和知识点
 └── README.md
 ```
 
@@ -398,12 +472,16 @@ ecommerce_data_agent/
 data/distillation/candidates.jsonl       # API 教师模型原始候选
 data/distillation/verified_train.jsonl   # 去重且标准 SQL 执行校验后的训练集
 data/evaluation/test.jsonl               # 与训练集隔离的测试题
+data/training/cspider_ecommerce_train.jsonl # 本机生成的 CSpider + 电商训练快照
+data/evaluation/cspider_dev.jsonl         # 本机生成的 CSpider 固定 dev 子集
 outputs/evaluation_epoch1.json            # epoch1 本地模型评测报告
 outputs/evaluation_epoch2.json            # epoch2 本地模型评测报告
 outputs/evaluation_epoch3.json            # epoch3 本地模型评测报告
 outputs/evaluation_epoch2_api_run*.json   # epoch2 的重复 API 三方评测报告
+outputs/evaluation_cspider_epoch2.json     # CSpider 50 条固定 dev 子集评测报告
 outputs/student_lora*/                    # 运行训练后在本机生成，不提交 GitHub
 outputs/charts/dashboard.html             # 运行可视化后在本机生成，不提交 GitHub
+outputs/charts/queries/query_*.html        # 每次 Agent 查询生成的独立图表，不提交 GitHub
 ```
 
 `candidates.jsonl` 保存人工种子、API 改写、裁判判决和拒绝原因；`verified_train.jsonl` 只保存人工种子与裁判高置信通过的改写；`test.jsonl` 包含 12 条独立人工测试题。仓库保留小型评估报告，LoRA 权重、训练摘要和 Plotly HTML 由脚本在本机重新生成，避免 Git 仓库体积过大。
@@ -415,7 +493,9 @@ python app.py --self-test
 python scripts/generate_distillation_data.py --seed-only
 python scripts/prepare_evaluation_data.py
 python scripts/train_student.py --check-data
-python -m compileall .
+python scripts/prepare_cspider.py --self-test
+python scripts/evaluate_cspider.py --self-test
+python -m compileall -q scripts app.py agent.py config.py database.py knowledge.py llm_client.py visualization.py run_agent.py run_finetuning.py run_visualization.py
 python visualization.py --self-test
 ```
 
@@ -429,12 +509,13 @@ python visualization.py --self-test
 - API 会接收问题、检索上下文和查询结果，存在费用、网络、隐私和服务商可用性约束。
 - API 裁判仍可能误判，尤其在教师与裁判使用同一模型时；规模化使用推荐独立裁判模型、较高阈值和独立测试集。
 - 当前评估集只有 12 条题，epoch2 的 75.00% 执行结果正确率只能说明本次小规模实验有提升，不能代表模型在其他数据库和复杂问题上的泛化能力。
+- CSpider 默认只使用固定子集并采用项目自建的轻量执行对比，不等同于数据集官方全量评测；只有实际生成公开报告后才能陈述对应指标。
 - 三次实验引用了相同的数据文件路径，测试集内容一致；训练文件曾在不同时间点更新，训练摘要显示实际样本快照为 54、71、72 条，因此当前结果不能严格证明训练轮数与准确率之间的因果关系。
 - 项目用于学习和算法实习展示，不应直接连接生产数据库。
 
 ## English Summary
 
-Ecommerce-Data-Agent is a CPU-oriented Chinese Text-to-SQL fine-tuning and black-box distillation project for a fixed MySQL teaching database. A strong API teacher paraphrases human-authored questions while an API judge filters rewrites by semantic equivalence and confidence; verified SQL remains fixed. A local Qwen student is trained with PEFT LoRA and compared against the same base model on a separate human test set. Across the completed experiments, the best observed execution-result accuracy was 75.00% for the epoch2 adapter, compared with 33.33% for the base model and 50.00% for the API reference on the same 12-sample test set.
+Ecommerce-Data-Agent is a CPU-oriented Chinese Text-to-SQL fine-tuning project with support for a fixed CSpider subset and a MySQL ecommerce domain dataset. A local Qwen student is trained with PEFT LoRA and compared with the same base model on separate public SQLite and domain MySQL execution evaluations. Optional API teacher and judge components only augment and filter domain paraphrases. The existing 75.00% best result belongs to the earlier 12-sample ecommerce experiment; the new CSpider experiment must be reported separately after execution.
 
 ## 参考资料
 
@@ -443,3 +524,4 @@ Ecommerce-Data-Agent is a CPU-oriented Chinese Text-to-SQL fine-tuning and black
 - [PEFT LoRA](https://huggingface.co/docs/peft/)
 - [PyMySQL](https://pymysql.readthedocs.io/)
 - [MySQL](https://dev.mysql.com/doc/)
+- [CSpider](https://github.com/taolusi/chisp)

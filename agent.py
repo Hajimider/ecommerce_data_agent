@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass
 
 from database import execute_select, normalize_select
-from knowledge import format_context, retrieve
+from knowledge import ORDER_STATUS_VALUES, format_context, retrieve
 
 
 SQL_SYSTEM = """你是电商数据分析 Agent 的 SQL 工具规划器。依据给出的业务知识回答用户问题。
@@ -38,6 +38,15 @@ def extract_plan(text):
     raise ValueError("模型没有返回合法的 JSON 决策")
 
 
+def validate_business_sql(sql):
+    status_pattern = re.compile(r"\b(?:\w+\.)?status\s*=\s*(['\"])(.*?)\1", re.I)
+    invalid_values = [match.group(2) for match in status_pattern.finditer(sql) if match.group(2) not in ORDER_STATUS_VALUES]
+    if invalid_values:
+        allowed = "、".join(ORDER_STATUS_VALUES)
+        raise ValueError(f"orders.status 使用了无效值 {invalid_values[0]!r}，只能使用：{allowed}")
+    return sql
+
+
 class EcommerceDataAgent:
     def __init__(self, settings, client):
         self.settings = settings
@@ -46,7 +55,7 @@ class EcommerceDataAgent:
     def _plan(self, question, context, error=""):
         repair_note = f"\n上一条 SQL 执行失败：{error}\n请仅修复 SQL。" if error else ""
         text = self.client.chat(SQL_SYSTEM, f"业务知识：\n{context}\n\n用户问题：{question}{repair_note}")
-        return extract_plan(text)
+        return validate_business_sql(extract_plan(text))
 
     def ask(self, question):
         question = question.strip()
@@ -55,8 +64,8 @@ class EcommerceDataAgent:
         sources = retrieve(question)
         context = format_context(sources)
         retried = False
-        sql = self._plan(question, context)
         try:
+            sql = self._plan(question, context)
             columns, rows, truncated = execute_select(self.settings, sql)
         except Exception as first_error:
             retried = True

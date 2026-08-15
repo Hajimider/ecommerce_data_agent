@@ -1,3 +1,6 @@
+ORDER_STATUS_VALUES = ("已完成", "待付款", "退款中", "已取消")
+
+
 KNOWLEDGE_BASE = [
     {
         "title": "数据库表结构与关联关系",
@@ -17,7 +20,7 @@ order_items(item_id, order_id, product_id, quantity, unit_price)
     {
         "title": "订单与用户分析口径",
         "keywords": ("订单", "用户", "城市", "会员", "状态", "已完成", "待付款", "退款", "取消"),
-        "content": "订单状态保存在 orders.status，订单金额保存在 orders.total_amount。用户城市和会员等级保存在 users 表。按城市或用户查询订单时，使用 orders JOIN users ON orders.user_id = users.user_id。",
+        "content": "订单状态保存在 orders.status，有效值只能使用中文原值：已完成、待付款、退款中、已取消，不能翻译成 completed、pending、refunded 或 cancelled。订单金额保存在 orders.total_amount。用户城市和会员等级保存在 users 表。按城市或用户查询订单时，使用 orders JOIN users ON orders.user_id = users.user_id。",
     },
     {
         "title": "库存与商品分析口径",

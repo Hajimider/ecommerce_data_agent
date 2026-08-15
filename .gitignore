@@ -8,3 +8,7 @@ outputs/charts/
 outputs/powerbi/
 outputs/evaluation.json
 outputs/evaluation_epoch4.json
+data/public/cspider/raw/
+data/public/cspider/processed/*.jsonl
+data/training/*.jsonl
+data/evaluation/cspider_dev.jsonl

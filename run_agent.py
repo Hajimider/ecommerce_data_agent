@@ -11,7 +11,7 @@ from app import main
 
 
 # 运行方式：api 调用云端模型；local 加载本地模型。二选一。
-LLM_MODE = ""
+LLM_MODE = "api"
 
 # 留空表示读取 .env；填写后只覆盖本次运行，不会写回文件。
 LLM_API_BASE = ""
@@ -33,7 +33,22 @@ MYSQL_PASSWORD = ""
 MYSQL_DATABASE = ""
 
 # 填入问题后，IDE 每次运行直接执行该问题；留空则进入连续提问模式。
-QUESTION = "查询张伟的全部订单，按下单日期排序"
+TEST_QUESTIONS = [
+    "统计各商品分类的销售额并按销售额降序排列",  # 柱状图
+    "按城市统计已完成订单的销售额",              # 柱状图
+    "按月份统计全部订单金额",                    # 折线图
+    "统计每种订单状态的订单数量",                # 饼图
+    "查询已完成订单中销量最高的 3 个商品",         # 柱状图
+    "查询库存少于 30 件的商品，按库存升序排列",    # 柱状图
+    "统计每位用户的订单总金额，按总金额降序排列",  # 柱状图
+    "计算已完成订单的平均金额",                  # 指标卡
+]
+QUESTION = TEST_QUESTIONS[4]
+
+# 查询成功后自动生成独立 Plotly HTML；OPEN_CHART=True 时同时打开浏览器。
+AUTO_CHART = True
+OPEN_CHART = True
+CHART_OUTPUT_DIR = "outputs/charts/queries"
 
 
 def apply_config():
@@ -60,5 +75,10 @@ def apply_config():
 
 if __name__ == "__main__":
     apply_config()
-    sys.argv = ["app.py"] + (["--question", QUESTION] if QUESTION else [])
+    arguments = ["app.py"] + (["--question", QUESTION] if QUESTION else [])
+    if AUTO_CHART:
+        arguments.extend(["--auto-chart", "--chart-output-dir", CHART_OUTPUT_DIR])
+    if AUTO_CHART and OPEN_CHART:
+        arguments.append("--open-chart")
+    sys.argv = arguments
     main()

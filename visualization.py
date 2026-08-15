@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import tempfile
 import webbrowser
 from datetime import date, datetime
 from decimal import Decimal
@@ -55,6 +56,14 @@ CHART_QUERIES = {
 }
 
 DASHBOARD_FILE = "dashboard.html"
+QUERY_CHART_NAMES = {
+    "bar": "柱状图",
+    "line": "折线图",
+    "pie": "饼图",
+    "scatter": "散点图",
+    "indicator": "指标卡",
+    "table": "数据表",
+}
 
 
 def _open_dashboard(path):
@@ -86,6 +95,112 @@ def _value(value):
     if isinstance(value, Decimal):
         return float(value)
     return value
+
+
+def _is_number(value):
+    return isinstance(value, (int, float, Decimal)) and not isinstance(value, bool)
+
+
+def _column_values(rows, index):
+    return [row[index] for row in rows if row[index] is not None]
+
+
+def _looks_temporal(column, values):
+    name = column.lower()
+    if any(keyword in name for keyword in ("date", "time", "month", "year", "日期", "时间", "月份", "年度")):
+        return True
+    return bool(values) and all(isinstance(value, (date, datetime)) for value in values)
+
+
+def choose_query_chart(columns, rows):
+    """根据结果结构选择稳定的 Plotly 图表，不让大模型生成绘图代码。"""
+    if not columns or not rows:
+        return {"kind": "table"}
+
+    numeric = []
+    categorical = []
+    temporal = []
+    for index, column in enumerate(columns):
+        values = _column_values(rows, index)
+        if values and all(_is_number(value) for value in values):
+            numeric.append(index)
+        else:
+            categorical.append(index)
+        if _looks_temporal(column, values):
+            temporal.append(index)
+
+    if len(rows) == 1 and len(columns) == 1 and len(numeric) == 1:
+        return {"kind": "indicator", "value": numeric[0]}
+    if temporal:
+        x_index = temporal[0]
+        y_index = next((index for index in numeric if index != x_index), None)
+        if y_index is not None:
+            return {"kind": "line", "x": x_index, "y": y_index}
+    if categorical and numeric:
+        x_index, y_index = categorical[0], numeric[0]
+        names = f"{columns[x_index]} {columns[y_index]}".lower()
+        if len(rows) <= 8 and any(keyword in names for keyword in ("status", "type", "状态", "类型")):
+            return {"kind": "pie", "x": x_index, "y": y_index}
+        return {"kind": "bar", "x": x_index, "y": y_index}
+    if len(numeric) >= 2:
+        return {"kind": "scatter", "x": numeric[0], "y": numeric[1]}
+    return {"kind": "table"}
+
+
+def _query_figure(question, columns, rows, chart):
+    import plotly.graph_objects as go
+
+    normalized_rows = [[_value(value) for value in row] for row in rows]
+    kind = chart["kind"]
+    if kind == "indicator":
+        index = chart["value"]
+        column = columns[index]
+        title = {
+            "average_amount": "平均订单金额",
+            "average_order_amount": "平均订单金额",
+            "total_amount": "订单总金额",
+            "sales_amount": "销售额",
+            "order_count": "订单数",
+        }.get(column.lower(), column)
+        indicator_text = f"{question} {column}".lower()
+        is_money = any(keyword in indicator_text for keyword in ("amount", "revenue", "sales", "price", "金额", "销售额", "营收", "收入", "价格"))
+        number = {"prefix": "¥", "valueformat": ",.2f"} if is_money else {}
+        return go.Figure(go.Indicator(mode="number", value=normalized_rows[0][index], number=number, title={"text": title}))
+    if kind == "table":
+        values = [[row[index] for row in normalized_rows] for index in range(len(columns))]
+        return go.Figure(go.Table(header={"values": columns}, cells={"values": values}))
+
+    x_index, y_index = chart["x"], chart["y"]
+    x_values = [row[x_index] for row in normalized_rows]
+    y_values = [row[y_index] for row in normalized_rows]
+    if kind == "line":
+        figure = go.Figure(go.Scatter(x=x_values, y=y_values, mode="lines+markers"))
+    elif kind == "pie":
+        figure = go.Figure(go.Pie(labels=x_values, values=y_values, hole=0.35))
+    elif kind == "scatter":
+        figure = go.Figure(go.Scatter(x=x_values, y=y_values, mode="markers"))
+    else:
+        figure = go.Figure(go.Bar(x=x_values, y=y_values))
+    figure.update_xaxes(title_text=columns[x_index])
+    figure.update_yaxes(title_text=columns[y_index])
+    figure.update_layout(title_text=question)
+    return figure
+
+
+def export_query_chart(question, columns, rows, output_dir="outputs/charts/queries", open_browser=True):
+    """将一次 Agent 查询结果导出为独立 HTML，并按需自动打开。"""
+    if not rows or not any(value is not None for row in rows for value in row):
+        raise ValueError("查询结果为空或只有 NULL，请检查 SQL 的筛选条件")
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    chart = choose_query_chart(columns, rows)
+    figure = _query_figure(question, columns, rows, chart)
+    figure.update_layout(title_text=question, template="plotly_white", margin={"l": 60, "r": 30, "t": 80, "b": 60})
+    chart_path = output_path / f"query_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.html"
+    figure.write_html(chart_path, full_html=True, include_plotlyjs="directory")
+    if open_browser:
+        _open_dashboard(chart_path)
+    return {"path": str(chart_path), "kind": chart["kind"], "name": QUERY_CHART_NAMES[chart["kind"]]}
 
 
 def _query(settings, sql, params=()):
@@ -157,11 +272,46 @@ def export_charts(settings=None, output_dir="outputs/charts", completed_status="
 
 
 def self_test():
+    from unittest.mock import patch
+
     assert set(CHART_QUERIES) == {"category_sales", "city_sales", "order_status", "inventory_value", "monthly_sales"}
     assert all(query.lstrip().upper().startswith("SELECT") for query in CHART_QUERIES.values())
     assert sum("%s" in query for query in CHART_QUERIES.values()) == 3
     assert "'%%Y-%%m'" in CHART_QUERIES["monthly_sales"]
-    print("Plotly 自检通过：5 个固定 SELECT 图表查询均已定义。")
+    assert choose_query_chart(["category", "sales"], [["办公设备", Decimal("100")]])["kind"] == "bar"
+    assert choose_query_chart(["order_month", "sales"], [["2025-01", Decimal("100")]])["kind"] == "line"
+    assert choose_query_chart(["year", "sales"], [[2025, Decimal("100")]]) == {"kind": "line", "x": 0, "y": 1}
+    assert choose_query_chart(["status", "order_count"], [["已完成", 3]])["kind"] == "pie"
+    assert choose_query_chart(["average_amount"], [[Decimal("100")]])["kind"] == "indicator"
+    indicator = _query_figure(
+        "计算已完成订单的平均金额",
+        ["average_amount"],
+        [[Decimal("405.875")]],
+        {"kind": "indicator", "value": 0},
+    ).data[0]
+    assert indicator.title.text == "平均订单金额"
+    assert indicator.number.prefix == "¥" and indicator.number.valueformat == ",.2f"
+    assert choose_query_chart(["product_name"], [["显示器"]])["kind"] == "table"
+    try:
+        export_query_chart("空指标", ["average_amount"], [[None]], open_browser=False)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("全 NULL 查询结果不应生成图表")
+    with tempfile.TemporaryDirectory() as output_dir:
+        with patch(f"{__name__}._open_dashboard") as open_dashboard:
+            result = export_query_chart(
+                "测试分类销售额",
+                ["category", "sales"],
+                [["办公设备", Decimal("100")], ["手机配件", Decimal("80")]],
+                output_dir=output_dir,
+                open_browser=True,
+            )
+            open_dashboard.assert_called_once()
+        assert result["kind"] == "bar"
+        assert Path(result["path"]).is_file()
+        assert (Path(output_dir) / "plotly.min.js").is_file()
+    print("Plotly 自检通过：固定总览与查询结果自动选图规则正常。")
 
 
 def main():

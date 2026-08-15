@@ -1,7 +1,9 @@
 import argparse
+import hashlib
 import json
 import random
 import sys
+from collections import Counter
 from pathlib import Path
 
 
@@ -43,9 +45,10 @@ def validate_records(path):
         if not isinstance(question, str) or not question.strip():
             raise ValueError(f"第 {line_number} 行缺少 question")
         normalize_select(sql)
-        if question.strip() in questions:
-            raise ValueError(f"第 {line_number} 行问题重复：{question}")
-        questions.add(question.strip())
+        question_key = (record.get("db_id", "ecommerce_text_to_sql"), question.strip())
+        if question_key in questions:
+            raise ValueError(f"第 {line_number} 行同一数据库内问题重复：{question}")
+        questions.add(question_key)
         if not isinstance(messages, list) or [item.get("role") for item in messages] != ["system", "user", "assistant"]:
             raise ValueError(f"第 {line_number} 行 messages 必须依次包含 system、user、assistant")
         try:
@@ -65,12 +68,32 @@ def token_ids(tokenizer, messages, add_generation_prompt):
 def encode_record(tokenizer, record, max_length):
     prompt_messages = record["messages"][:2]
     prompt_ids = token_ids(tokenizer, prompt_messages, True)
-    input_ids = token_ids(tokenizer, record["messages"], False)[:max_length]
-    prompt_length = min(len(prompt_ids), len(input_ids))
-    labels = [-100] * prompt_length + input_ids[prompt_length:]
-    if all(label == -100 for label in labels):
-        raise ValueError("max-length 太小，截断后没有保留 assistant 回答")
-    return {"input_ids": input_ids, "attention_mask": [1] * len(input_ids), "labels": labels}
+    full_ids = token_ids(tokenizer, record["messages"], False)
+    if full_ids[: len(prompt_ids)] != prompt_ids:
+        raise ValueError("聊天模板的 prompt 与完整对话前缀不一致")
+
+    answer_ids = full_ids[len(prompt_ids) :]
+    if not answer_ids:
+        raise ValueError("聊天模板没有保留 assistant 回答")
+    if len(answer_ids) >= max_length:
+        raise ValueError("max-length 太小，无法保留完整 assistant 回答")
+
+    prompt_budget = max_length - len(answer_ids)
+    prompt_truncated = len(prompt_ids) > prompt_budget
+    if prompt_truncated:
+        # 保留系统指令和用户问题，优先裁剪位于中间的超长数据库结构。
+        head_size = min(128, prompt_budget // 2)
+        tail_size = prompt_budget - head_size
+        prompt_ids = prompt_ids[:head_size] + prompt_ids[-tail_size:]
+
+    input_ids = prompt_ids + answer_ids
+    labels = [-100] * len(prompt_ids) + answer_ids
+    return {
+        "input_ids": input_ids,
+        "attention_mask": [1] * len(input_ids),
+        "labels": labels,
+        "prompt_truncated": prompt_truncated,
+    }
 
 
 def train(args, records):
@@ -100,6 +123,9 @@ def train(args, records):
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token = tokenizer.eos_token
     encoded_records = [encode_record(tokenizer, record, args.max_length) for record in records]
+    truncated_count = sum(item.pop("prompt_truncated") for item in encoded_records)
+    if truncated_count:
+        print(f"超长提示已安全裁剪：{truncated_count} 条；assistant 标准 SQL 均完整保留。")
 
     class TrainingDataset(Dataset):
         def __len__(self):
@@ -161,6 +187,10 @@ def train(args, records):
     tokenizer.save_pretrained(output_dir)
     summary = {
         "samples": len(records),
+        "data_file": Path(args.data_path).name,
+        "data_sha256": hashlib.sha256(Path(args.data_path).read_bytes()).hexdigest(),
+        "source_counts": dict(Counter(record.get("source", "unknown") for record in records)),
+        "truncated_prompts": truncated_count,
         "epochs": args.epochs,
         "max_length": args.max_length,
         "gradient_accumulation": args.gradient_accumulation,
