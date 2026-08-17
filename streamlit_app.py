@@ -28,13 +28,15 @@ st.set_page_config(
 )
 
 ROOT = Path(__file__).resolve().parent
-REPORT_PATH = ROOT / "outputs" / "evaluation_epoch2.json"
+REPORT_PATH = ROOT / "outputs" / "evaluation_fixed_epoch2.json"
 BACKENDS = {
     "LoRA 微调模型": "lora",
     "本地基础模型": "base",
     "API 模型": "api",
 }
 EXAMPLE_QUESTIONS = [
+    "统计每位用户有多少个订单，没有订单的用户也要显示",
+    "计算已完成订单里每个商品的销售额",
     "统计各商品分类的销售额并按销售额降序排列",
     "按城市统计已完成订单的销售额",
     "按月份统计全部订单金额",
@@ -44,29 +46,59 @@ EXAMPLE_QUESTIONS = [
     "统计每位用户的订单总金额，按总金额降序排列",
     "计算已完成订单的平均金额",
 ]
-SINGLE_CASE = {
-    "question": "按月份统计已完成订单数",
-    "base_sql": """SELECT
-    DATE_FORMAT(order_date, '%Y-%m') AS month,
-    COUNT(*) AS complete_orders
-FROM orders
-WHERE status = '已完成'
-GROUP BY month;""",
-    "lora_sql": """SELECT
-    DATE_FORMAT(order_date, '%Y-%m') AS order_month,
-    COUNT(*) AS order_count
-FROM orders
-WHERE status = '已完成'
-GROUP BY order_month
-ORDER BY order_month;""",
-    "rows": [
-        ["2025-01", 2],
-        ["2025-02", 1],
-        ["2025-03", 2],
-        ["2025-04", 1],
-        ["2025-05", 2],
-    ],
-}
+COMPARISON_CASES = [
+    {
+        "title": "用户订单数统计",
+        "question": "统计每位用户有多少个订单，没有订单的用户也要显示",
+        "base_sql": """SELECT
+    u.user_id,
+    COUNT(o.order_id) AS num_orders
+FROM users u
+LEFT JOIN orders o ON u.user_id = o.user_id
+GROUP BY u.user_id;""",
+        "base_columns": ["user_id", "num_orders"],
+        "base_rows": [[1, 2], [2, 2], [3, 2], [4, 2], [5, 1], [6, 1], [7, 1], [8, 1]],
+        "base_correct": False,
+        "lora_sql": """SELECT
+    u.name,
+    COUNT(o.order_id) AS order_count
+FROM users u
+LEFT JOIN orders o ON u.user_id = o.user_id
+GROUP BY u.user_id, u.name
+ORDER BY order_count DESC;""",
+        "lora_columns": ["name", "order_count"],
+        "lora_rows": [["张伟", 2], ["李娜", 2], ["王磊", 2], ["赵敏", 2], ["陈晨", 1], ["刘洋", 1], ["周婷", 1], ["孙浩", 1]],
+        "lora_correct": True,
+    },
+    {
+        "title": "已完成订单商品销售额",
+        "question": "计算已完成订单里每个商品的销售额",
+        "base_sql": """SELECT
+    p.product_name,
+    SUM(oi.quantity * oi.unit_price) AS sales
+FROM orders o
+JOIN users u ON o.user_id = u.user_id
+JOIN order_items oi ON o.order_id = oi.order_id
+JOIN products p ON oi.product_id = p.product_id
+WHERE o.status = '已完成'
+GROUP BY p.product_name;""",
+        "base_columns": ["product_name", "sales"],
+        "base_rows": [["蓝牙耳机", 597.00], ["机械键盘", 329.00], ["保温杯", 138.00], ["手机支架", 78.00], ["充电宝", 447.00], ["显示器", 1299.00], ["无线鼠标", 89.00], ["台灯", 318.00]],
+        "base_correct": True,
+        "lora_sql": """SELECT
+    p.product_name,
+    SUM(oi.quantity * oi.unit_price) AS total_revenue
+FROM order_items oi
+JOIN products p ON oi.product_id = p.product_id
+JOIN orders o ON oi.order_id = o.order_id
+WHERE o.status = '已完成'
+GROUP BY p.product_id, p.product_name
+ORDER BY total_revenue DESC;""",
+        "lora_columns": ["product_name", "total_revenue"],
+        "lora_rows": [["显示器", 1299.00], ["蓝牙耳机", 597.00], ["充电宝", 447.00], ["机械键盘", 329.00], ["台灯", 318.00], ["保温杯", 138.00], ["无线鼠标", 89.00], ["手机支架", 78.00]],
+        "lora_correct": True,
+    },
+]
 
 
 def backend_settings(backend):
@@ -135,9 +167,41 @@ def render_live_result(record):
         st.write("、".join(result.sources))
 
 
+def render_demo_case(case, index):
+    st.subheader(f"{index}. {case['title']}")
+    st.caption(case["question"])
+    base_column, lora_column = st.columns(2)
+    with base_column.container(border=True, height="stretch"):
+        st.markdown("**本地基础模型**")
+        st.code(case["base_sql"], language="sql")
+        st.badge(
+            "结果正确" if case["base_correct"] else "结果错误",
+            color="green" if case["base_correct"] else "red",
+            icon=":material/check:" if case["base_correct"] else ":material/close:",
+        )
+        st.dataframe(
+            pd.DataFrame(case["base_rows"], columns=case["base_columns"]),
+            hide_index=True,
+            key=f"demo_case_{index}_base",
+        )
+    with lora_column.container(border=True, height="stretch"):
+        st.markdown("**LoRA 微调模型**")
+        st.code(case["lora_sql"], language="sql")
+        st.badge(
+            "结果正确" if case["lora_correct"] else "结果错误",
+            color="green" if case["lora_correct"] else "red",
+            icon=":material/check:" if case["lora_correct"] else ":material/close:",
+        )
+        st.dataframe(
+            pd.DataFrame(case["lora_rows"], columns=case["lora_columns"]),
+            hide_index=True,
+            key=f"demo_case_{index}_lora",
+        )
+
+
 def render_comparison():
     if not REPORT_PATH.is_file():
-        st.error("找不到评估报告 outputs/evaluation_epoch2.json。", icon=":material/error:")
+        st.error("找不到评估报告 outputs/evaluation_fixed_epoch2.json。", icon=":material/error:")
         return
     report = load_report(str(REPORT_PATH))["结果"]
     base = report["本地基础模型"]
@@ -170,28 +234,13 @@ def render_comparison():
     with st.container(border=True):
         st.subheader("固定测试集评估")
         st.dataframe(comparison, hide_index=True, key="evaluation_comparison")
-        st.caption("结果来自 12 条未参与训练的电商独立测试题。")
+        st.caption("结果来自 24 条未参与训练的电商独立测试题，当前展示 epoch2 LoRA。")
 
-    st.subheader("单题实际运行记录")
-    st.caption(SINGLE_CASE["question"])
-    base_column, lora_column = st.columns(2)
-    with base_column.container(border=True, height="stretch"):
-        st.markdown("**本地基础模型**")
-        st.code(SINGLE_CASE["base_sql"], language="sql")
-        st.badge("执行结果正确", color="green", icon=":material/check:")
-    with lora_column.container(border=True, height="stretch"):
-        st.markdown("**LoRA 微调模型**")
-        st.code(SINGLE_CASE["lora_sql"], language="sql")
-        st.badge("执行结果正确", color="green", icon=":material/check:")
-
-    with st.container(border=True):
-        st.markdown("**共同执行结果**")
-        st.dataframe(
-            pd.DataFrame(SINGLE_CASE["rows"], columns=["月份", "已完成订单数"]),
-            hide_index=True,
-            key="single_case_result",
-        )
-        st.caption("LoRA 输出的字段别名、排序和 SQL 结构更贴近标准答案。单次耗时受模型加载、缓存和 CPU 状态影响，不作为推理性能结论。")
+    st.subheader("双题实际运行记录")
+    st.caption("第一题展示微调后的字段与分组修正，第二题展示多表销售额关联；结果来自本地固定 epoch2 适配器的实际运行记录。")
+    for index, case in enumerate(COMPARISON_CASES, start=1):
+        render_demo_case(case, index)
+    st.caption("单次耗时受模型加载、缓存和 CPU 状态影响，不作为推理性能结论。")
 
 
 st.title("Text-to-SQL 微调 Demo")

@@ -38,6 +38,18 @@ HUMAN_TEST_CASES = [
     ("test_completed_product_revenue", "计算已完成订单里每个商品的销售额", "SELECT p.product_name, SUM(oi.quantity * oi.unit_price) AS revenue FROM products p JOIN order_items oi ON p.product_id = oi.product_id JOIN orders o ON oi.order_id = o.order_id WHERE o.status = '已完成' GROUP BY p.product_id, p.product_name ORDER BY revenue DESC;"),
     ("test_beijing_completed", "查询北京用户已经完成的订单编号和金额", "SELECT o.order_id, o.total_amount FROM orders o JOIN users u ON o.user_id = u.user_id WHERE u.city = '北京' AND o.status = '已完成' ORDER BY o.order_date;"),
     ("test_stock_value", "计算每个商品的库存金额并按金额降序排列", "SELECT product_name, price * stock AS stock_value FROM products ORDER BY stock_value DESC;"),
+    ("test_city_user_count", "统计每个城市的用户数量，按人数降序排列", "SELECT city, COUNT(*) AS user_count FROM users GROUP BY city ORDER BY user_count DESC, city;"),
+    ("test_category_average_price", "计算各商品分类的平均售价并按均价降序排列", "SELECT category, AVG(price) AS average_price FROM products GROUP BY category ORDER BY average_price DESC;"),
+    ("test_multi_product_orders", "找出包含至少两种不同商品的订单", "SELECT o.order_id, COUNT(DISTINCT oi.product_id) AS product_count FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.order_id HAVING product_count >= 2 ORDER BY product_count DESC, o.order_id;"),
+    ("test_users_without_completed_orders", "查询没有任何已完成订单的用户姓名", "SELECT u.name FROM users u LEFT JOIN orders o ON u.user_id = o.user_id AND o.status = '已完成' WHERE o.order_id IS NULL ORDER BY u.user_id;"),
+    ("test_latest_order_date", "查询每位下过单用户的最近下单日期", "SELECT u.name, MAX(o.order_date) AS latest_order_date FROM users u JOIN orders o ON u.user_id = o.user_id GROUP BY u.user_id, u.name ORDER BY latest_order_date DESC, u.user_id;"),
+    ("test_completed_order_item_count", "统计每个已完成订单包含的明细行数", "SELECT o.order_id, COUNT(oi.item_id) AS item_count FROM orders o JOIN order_items oi ON o.order_id = oi.order_id WHERE o.status = '已完成' GROUP BY o.order_id ORDER BY item_count DESC, o.order_id;"),
+    ("test_beijing_product_quantity", "统计北京用户购买过的各商品数量", "SELECT p.product_name, SUM(oi.quantity) AS purchased_quantity FROM users u JOIN orders o ON u.user_id = o.user_id JOIN order_items oi ON o.order_id = oi.order_id JOIN products p ON oi.product_id = p.product_id WHERE u.city = '北京' GROUP BY p.product_id, p.product_name ORDER BY purchased_quantity DESC, p.product_id;"),
+    ("test_category_average_stock", "计算每个商品分类的平均库存量", "SELECT category, AVG(stock) AS average_stock FROM products GROUP BY category ORDER BY average_stock DESC;"),
+    ("test_order_amount_range", "查询金额在 100 元到 400 元之间的订单", "SELECT order_id, total_amount FROM orders WHERE total_amount BETWEEN 100 AND 400 ORDER BY total_amount DESC, order_id;"),
+    ("test_gold_completed_revenue", "统计每位黄金会员已完成订单的总金额", "SELECT u.name, SUM(o.total_amount) AS completed_amount FROM users u JOIN orders o ON u.user_id = o.user_id WHERE u.member_level = '黄金' AND o.status = '已完成' GROUP BY u.user_id, u.name ORDER BY completed_amount DESC, u.user_id;"),
+    ("test_above_average_price", "列出售价高于全部商品平均售价的商品", "SELECT product_name, price FROM products WHERE price > (SELECT AVG(price) FROM products) ORDER BY price DESC;"),
+    ("test_cancelled_order_products", "列出已取消订单中的商品名称和购买数量", "SELECT o.order_id, p.product_name, oi.quantity FROM orders o JOIN order_items oi ON o.order_id = oi.order_id JOIN products p ON oi.product_id = p.product_id WHERE o.status = '已取消' ORDER BY oi.item_id;"),
 ]
 
 

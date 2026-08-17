@@ -1,5 +1,6 @@
 import argparse
 import gc
+import hashlib
 import json
 import sys
 import time
@@ -16,6 +17,25 @@ from config import get_settings
 from database import execute_select
 from llm_client import LLMClient, LocalLLMClient
 from scripts.distillation_data import build_user_prompt, read_jsonl
+
+
+def file_sha256(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def records_sha256(records):
+    payload = "\n".join(
+        json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        for record in records
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def read_training_summary(adapter_path):
+    summary_path = Path(adapter_path) / "training_summary.json"
+    if not summary_path.is_file():
+        return {}
+    return json.loads(summary_path.read_text(encoding="utf-8"))
 
 
 def parse_args():
@@ -125,7 +145,9 @@ def main():
         raise SystemExit("错误：--model-path 不是有效的本地模型目录")
     if not adapter_path.is_dir():
         raise SystemExit("错误：--adapter-path 不是有效的 LoRA 目录，请先完成训练")
-    records = read_jsonl(args.test_path)
+    all_records = read_jsonl(args.test_path)
+    source_sample_count = len(all_records)
+    records = all_records
     if args.max_samples:
         records = records[: args.max_samples]
     if not records:
@@ -133,7 +155,21 @@ def main():
 
     settings = get_settings()
     local_common = replace(settings, mode="local", local_model_path=str(model_path), local_threads=max(1, args.threads), local_max_new_tokens=args.max_new_tokens)
-    report = {"说明": "严格微调对比看基础模型与 LoRA；API 教师仅作能力上限参考。", "测试集": args.test_path, "结果": {}}
+    report = {
+        "说明": "严格微调对比看基础模型与 LoRA；API 教师仅作能力上限参考。",
+        "实验配置": {
+            "适配器目录": adapter_path.name,
+            "训练摘要": read_training_summary(adapter_path),
+            "测试集文件": Path(args.test_path).name,
+            "测试集SHA256": file_sha256(args.test_path),
+            "测试集原始样本数": source_sample_count,
+            "实际评测样本数": len(records),
+            "实际评测最大样本数": args.max_samples,
+            "实际评测ID": [record["id"] for record in records],
+            "实际评测数据SHA256": records_sha256(records),
+        },
+        "结果": {},
+    }
 
     base_client = LocalLLMClient(replace(local_common, local_adapter_path=""))
     report["结果"]["本地基础模型"] = evaluate_client("本地基础模型", base_client, settings, records)

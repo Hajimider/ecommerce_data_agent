@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 
 
-# 操作：generate、prepare_public、train、evaluate、evaluate_public、all；apply_reviews 仅用于可选人工覆盖。
-ACTION = "evaluate_public"
+# 操作：generate、prepare_public、train、evaluate、evaluate_public、compare_epochs、all；apply_reviews 仅用于可选人工覆盖。
+# compare_epochs 会依次训练并评估固定 72/24 数据上的 epoch 1、2、3，请预留足够时间。
+ACTION = "compare_epochs"
 
 # True：调用 API 教师和 API 裁判；False：只使用 15 条人工种子做链路检查。
 USE_API_TEACHER = True
@@ -35,6 +36,13 @@ DOMAIN_TRAIN_DATA = "data/distillation/verified_train.jsonl"
 COMBINED_TRAIN_DATA = "data/training/cspider_ecommerce_train.jsonl"
 CSPIDER_DEV_DATA = "data/evaluation/cspider_dev.jsonl"
 CSPIDER_EVALUATION_OUTPUT = "outputs/evaluation_cspider_epoch2.json"
+
+# 严格 epoch 对比：训练集、测试集和其他训练参数保持不变，只改变 epoch。
+FIXED_TRAIN_DATA = "data/distillation/fixed_train_72.jsonl"
+FIXED_TEST_DATA = "data/evaluation/test.jsonl"
+FIXED_TRAIN_SAMPLES = 72
+FIXED_TEST_SAMPLES = 24
+COMPARISON_EPOCHS = (1, 2, 3)
 
 # 留空表示继续使用 .env；填写后只覆盖本次运行，不会写回文件。
 LLM_API_BASE = ""
@@ -92,7 +100,7 @@ def generate_data():
     if not USE_API_TEACHER:
         command.append("--seed-only")
     run(*command)
-    run("scripts/prepare_evaluation_data.py")
+    run("scripts/prepare_evaluation_data.py", "--train-path", DOMAIN_TRAIN_DATA)
 
 
 def apply_reviews():
@@ -112,38 +120,76 @@ def prepare_public_data():
     )
 
 
-def train_model():
+def train_model(data_path=None, output_dir=None, epochs=None, max_samples=None):
     model_path = configured_model_path()
     if not model_path:
         raise SystemExit("请先填写 MODEL_PATH，或在 .env 中配置 LOCAL_MODEL_PATH。")
-    data_path = COMBINED_TRAIN_DATA if USE_CSPIDER else DOMAIN_TRAIN_DATA
+    data_path = data_path or (COMBINED_TRAIN_DATA if USE_CSPIDER else DOMAIN_TRAIN_DATA)
+    output_dir = output_dir or ADAPTER_OUTPUT
+    epochs = epochs or EPOCHS
     command = [
         "scripts/train_student.py", "--model-path", model_path,
         "--data-path", data_path,
-        "--output-dir", ADAPTER_OUTPUT,
-        "--epochs", str(EPOCHS),
+        "--output-dir", output_dir,
+        "--epochs", str(epochs),
         "--max-length", str(MAX_LENGTH),
     ]
-    if MAX_SAMPLES:
-        command.extend(["--max-samples", str(MAX_SAMPLES)])
+    max_samples = MAX_SAMPLES if max_samples is None else max_samples
+    if max_samples:
+        command.extend(["--max-samples", str(max_samples)])
     run(*command)
 
 
-def evaluate_model():
+def evaluate_model(adapter_path=None, report_path=None, test_path="data/evaluation/test.jsonl", include_api=None, max_samples=None):
     model_path = configured_model_path()
     if not model_path:
         raise SystemExit("请先填写 MODEL_PATH，或在 .env 中配置 LOCAL_MODEL_PATH。")
+    adapter_path = adapter_path or ADAPTER_OUTPUT
+    report_path = report_path or EVALUATION_OUTPUT
+    include_api = INCLUDE_API_IN_EVALUATION if include_api is None else include_api
     command = [
         "scripts/evaluate_finetuning.py",
         "--model-path", model_path,
-        "--adapter-path", ADAPTER_OUTPUT,
-        "--report-path", EVALUATION_OUTPUT,
+        "--adapter-path", adapter_path,
+        "--test-path", test_path,
+        "--report-path", report_path,
     ]
-    if MAX_SAMPLES:
-        command.extend(["--max-samples", str(MAX_SAMPLES)])
-    if INCLUDE_API_IN_EVALUATION:
+    max_samples = MAX_SAMPLES if max_samples is None else max_samples
+    if max_samples:
+        command.extend(["--max-samples", str(max_samples)])
+    if include_api:
         command.append("--include-api")
     run(*command)
+
+
+def count_jsonl(path):
+    with (ROOT / path).open("r", encoding="utf-8") as file:
+        return sum(1 for line in file if line.strip())
+
+
+def compare_epochs():
+    run("scripts/prepare_evaluation_data.py", "--check-only", "--output-path", FIXED_TEST_DATA, "--train-path", FIXED_TRAIN_DATA)
+    actual_train = count_jsonl(FIXED_TRAIN_DATA)
+    actual_test = count_jsonl(FIXED_TEST_DATA)
+    if actual_train != FIXED_TRAIN_SAMPLES or actual_test != FIXED_TEST_SAMPLES:
+        raise SystemExit(
+            f"固定实验数据数量错误：训练集 {actual_train}/{FIXED_TRAIN_SAMPLES}，"
+            f"测试集 {actual_test}/{FIXED_TEST_SAMPLES}。"
+        )
+
+    outputs = [
+        (ROOT / f"outputs/student_lora_fixed_epoch{epoch}", ROOT / f"outputs/evaluation_fixed_epoch{epoch}.json")
+        for epoch in COMPARISON_EPOCHS
+    ]
+    existing = [str(path.relative_to(ROOT)) for pair in outputs for path in pair if path.exists()]
+    if existing:
+        raise SystemExit(f"固定实验不会覆盖已有产物，请先改名或移走：{', '.join(existing)}")
+
+    for epoch, (adapter_full_path, report_full_path) in zip(COMPARISON_EPOCHS, outputs):
+        adapter_path = str(adapter_full_path.relative_to(ROOT))
+        report_path = str(report_full_path.relative_to(ROOT))
+        train_model(FIXED_TRAIN_DATA, adapter_path, epoch, max_samples=0)
+        evaluate_model(adapter_path, report_path, FIXED_TEST_DATA, include_api=False, max_samples=0)
 
 
 def evaluate_public_model():
@@ -164,8 +210,8 @@ def evaluate_public_model():
 
 def main():
     apply_overrides()
-    if ACTION not in {"generate", "prepare_public", "apply_reviews", "train", "evaluate", "evaluate_public", "all"}:
-        raise SystemExit("ACTION 只能是 generate、prepare_public、apply_reviews、train、evaluate、evaluate_public 或 all。")
+    if ACTION not in {"generate", "prepare_public", "apply_reviews", "train", "evaluate", "evaluate_public", "compare_epochs", "all"}:
+        raise SystemExit("ACTION 只能是 generate、prepare_public、apply_reviews、train、evaluate、evaluate_public、compare_epochs 或 all。")
     if ACTION in {"generate", "all"}:
         generate_data()
     if ACTION == "prepare_public" or (ACTION == "all" and USE_CSPIDER):
@@ -178,6 +224,8 @@ def main():
         evaluate_model()
     if ACTION == "evaluate_public" or (ACTION == "all" and USE_CSPIDER):
         evaluate_public_model()
+    if ACTION == "compare_epochs":
+        compare_epochs()
 
 
 if __name__ == "__main__":

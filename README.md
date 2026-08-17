@@ -42,7 +42,7 @@
 - 根据查询结果自动选择柱状图、折线图、饼图、散点图、指标卡或数据表。
 - Streamlit 页面直接展示在线查询、执行结果、自动图表和微调前后指标。
 
-**核心实验结果**
+**历史核心实验结果**
 
 | 模型 | 执行结果正确率 | SQL 可执行率 | Agent 首次成功率 |
 | --- | ---: | ---: | ---: |
@@ -50,7 +50,18 @@
 | 最佳 LoRA 模型 | 75.00% | 91.67% | 91.67% |
 | 变化 | +41.67 个百分点 | 0.00 个百分点 | +8.34 个百分点 |
 
-以上结果来自固定的 12 条电商独立测试题。该规模适合教学验证，不代表模型在其他数据库上的通用水平。
+以上结果来自早期 12 条电商独立测试题。项目现已完成固定 72 条训练集、24 条测试集的严格 epoch 对比，最新结果见后文；历史指标与新指标分开记录，避免混用实验口径。
+
+**当前固定 72/24 实验结果**
+
+| 模型/轮数 | 执行结果正确率 | SQL 可执行率 | Agent 首次成功率 |
+| --- | ---: | ---: | ---: |
+| 本地基础模型（同一基线） | 45.83% | 95.83% | 83.33% |
+| LoRA epoch1 | 54.17% | 87.50% | 87.50% |
+| LoRA epoch2（推荐） | 58.33% | 87.50% | 87.50% |
+| LoRA epoch3 | 58.33% | 87.50% | 83.33% |
+
+固定实验中 epoch2 与 epoch3 的结果正确率相同，但 epoch3 首次成功率下降，因此 Demo 默认使用 epoch2。LoRA 相比基础模型结果正确率提升 12.50 个百分点；测试集只有 24 条，每道题约对应 4.17 个百分点，指标应结合具体 SQL 和执行结果解读。
 
 **Agent 运行效果示意**
 
@@ -169,6 +180,7 @@ python run_visualization.py
   - **已完成内容**
     - [√] CSpider 公开数据转换、固定抽样和训练快照生成。
     - [√] 电商领域人工标准数据与独立测试集。
+    - [√] 固定 72 条训练快照与 24 条 MySQL 可执行测试题。
     - [√] API 合成问法、批量裁判、SQL 执行过滤和去重。
     - [√] Qwen2.5-1.5B-Instruct PEFT LoRA SFT 训练。
     - [√] Base、LoRA 与可选 API 教师的 MySQL 执行评测。
@@ -244,8 +256,8 @@ CSpider 公开数据 + 电商领域数据
 | 数据集 | 用途 | 当前实验规模 | 评测方式 |
 | --- | --- | ---: | --- |
 | CSpider | 学习中文跨数据库 SQL 结构并测试公开泛化 | train 200 条、dev 50 条 | SQLite 轻量执行对比 |
-| 电商领域训练集 | 学习 MySQL 方言、表关系和中文业务状态 | 当前文件 72 条 | 只用于训练，不直接充当测试集 |
-| 电商独立测试集 | 检查领域 Text-to-SQL 效果 | 12 条 | MySQL 执行结果对比 |
+| 电商领域训练集 | 学习 MySQL 方言、表关系和中文业务状态 | 固定快照 72 条 | 只用于训练，不直接充当测试集 |
+| 电商独立测试集 | 检查领域 Text-to-SQL 效果 | 固定 24 条 | MySQL 执行结果对比 |
 
 CSpider 通过固定随机种子抽样，生成的训练摘要记录数据来源数量和 SHA-256。当前固定合并训练快照共 272 条，其中包括 200 条公开训练样本和 72 条电商领域样本。
 
@@ -275,13 +287,24 @@ LoRA 只训练少量低秩参数，不修改完整基础模型权重。不同实
 推荐通过 `run_finetuning.py` 顶部配置执行：
 
 ```python
-ACTION = "train"                 # generate、prepare_public、train、evaluate、evaluate_public 或 all
+ACTION = "train"                 # generate、prepare_public、train、evaluate、evaluate_public、compare_epochs 或 all
 EPOCHS = 2
 ADAPTER_OUTPUT = "outputs/student_lora_epoch2"
 EVALUATION_OUTPUT = "outputs/evaluation_epoch2.json"
 ```
 
 `apply_reviews` 仅用于可选人工覆盖，不属于默认自动流程。
+
+严格比较 epoch 时，将 `ACTION` 设为 `compare_epochs`。程序固定使用同一份 72 条训练快照和 24 条测试集，依次从同一基础模型训练 epoch 1、2、3，其他训练参数保持不变：
+
+```python
+ACTION = "compare_epochs"
+COMPARISON_EPOCHS = (1, 2, 3)
+FIXED_TRAIN_DATA = "data/distillation/fixed_train_72.jsonl"
+FIXED_TEST_DATA = "data/evaluation/test.jsonl"
+```
+
+新适配器分别保存到 `outputs/student_lora_fixed_epoch1`、`outputs/student_lora_fixed_epoch2`、`outputs/student_lora_fixed_epoch3`，评估报告分别保存为 `outputs/evaluation_fixed_epoch1.json`、`outputs/evaluation_fixed_epoch2.json`、`outputs/evaluation_fixed_epoch3.json`。报告会记录训练摘要、训练数据 SHA-256、测试集 SHA-256 和实际样本 ID，便于确认三次实验只改变 epoch。程序会先校验固定测试快照且拒绝覆盖任何已有产物。
 
 公开数据实验可以依次运行：
 
@@ -295,7 +318,7 @@ prepare_public -> train -> evaluate -> evaluate_public
 
 #### 3.1 电商 MySQL 独立测试
 
-电商评估使用 12 条未参与训练的测试题，对比同一本地基础模型与加载 LoRA 后的学生模型。已有三次完整实验结果如下：
+当前电商评估集已扩充为 24 条未参与训练的问题，全部标准 SQL 均已通过 MySQL 执行验证且结果非空。下表是扩充前 12 条测试集上的三次历史实验结果：
 
 | 评估报告 | 训练样本数 | LoRA 轮数 | 执行结果正确率 | SQL 可执行率 | Agent 首次成功率 |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -305,7 +328,7 @@ prepare_public -> train -> evaluate -> evaluate_public
 
 三份报告中的本地基础模型基线一致：执行结果正确率 33.33%、SQL 可执行率 91.67%、Agent 首次成功率 83.33%。当前最佳 LoRA 实验为 epoch2，执行结果正确率达到 75.00%，较基础模型提升 41.67 个百分点。
 
-三次实验使用相同文件路径和同一测试集，但训练文件曾在不同时间重新生成，实际训练样本快照分别为 54、71、72 条。因此这些结果可以比较三次完整实验，不能将差异严格归因于训练轮数。严格单变量实验应先固定训练快照，再分别训练不同 epoch。
+三次历史实验使用同一测试集，但训练文件曾在不同时间重新生成，实际训练样本快照分别为 54、71、72 条，因此差异不能严格归因于训练轮数。严格单变量结果以固定 72/24 报告为准，推荐使用 epoch2。
 
 #### 3.2 API 教师对照
 
@@ -319,7 +342,7 @@ epoch2 的 API 教师对照评估连续运行两次，结果一致：
 | Agent 首次成功率 | 83.33% | 91.67% | 100.00% |
 | Agent 重试率 | 16.67% | 8.33% | 0.00% |
 
-API 教师不是同一基础模型，不能用于严格判断 LoRA 的提升。它只用于生成数据、自动审核和提供能力参考。API 在当前 12 条电商题上低于 LoRA，说明本地学生更贴合当前数据库口径，不代表学生模型的通用能力超过云端模型。
+API 教师不是同一基础模型，不能用于严格判断 LoRA 的提升。它只用于生成数据、自动审核和提供能力参考。API 在当时 12 条电商题上低于 LoRA，说明本地学生更贴合该测试口径，不代表学生模型的通用能力超过云端模型。
 
 #### 3.3 CSpider 公开子集评估
 
@@ -418,19 +441,21 @@ python run_demo.py
 页面包含两个视图：
 
 - **在线查询**：选择 LoRA、本地基础模型或 API 模型，输入自然语言问题后展示格式化 SQL、MySQL 查询结果、中文结论、业务知识来源和自动图表。
-- **微调对比**：直接读取已有评估报告，展示基础模型与 LoRA 的执行结果正确率、SQL 可执行率、Agent 首次成功率和单题 SQL 对比，无需现场重新训练。
+- **微调对比**：直接读取固定 24 条测试集的 epoch2 评估报告，展示基础模型与 LoRA 的执行结果正确率、SQL 可执行率、Agent 首次成功率和双题 SQL 对比，无需现场重新训练。
 
 本地模型和 LoRA 路径、API 配置以及 MySQL 连接信息统一从 `.env` 读取。页面同一时间只缓存一个模型后端，切换模型时不会主动让基础模型与 LoRA 同时常驻内存。
 
 #### 5.2 微调前后对比 Demo
 
-`run_compare.py` 从现有独立测试集中选择一道题，依次运行基础模型和 LoRA。程序会展示标准 SQL、标准执行结果、两种模型的预测 SQL、执行结果、正确性和耗时。
+`run_compare.py` 从现有独立测试集中选择两道题，依次运行基础模型和 LoRA。程序会分别展示标准 SQL、标准执行结果、两种模型的预测 SQL、执行结果、正确性和耗时。
 
 ```python
 MODEL_PATH = ""  # 留空时读取 .env
-ADAPTER_PATH = "outputs/student_lora_epoch2"
-TEST_CASE_ID = "test_completed_month_count"
+ADAPTER_PATH = "outputs/student_lora_fixed_epoch2"
+DEMO_CASE_IDS = ("test_user_order_count", "test_completed_product_revenue")
 ```
+
+默认第一题选择 `test_user_order_count`，因为固定 epoch2 评估中基础模型在该题结果错误，而 LoRA 学生模型通过；第二题 `test_completed_product_revenue` 用于展示商品、订单明细和订单状态的多表销售额计算。下面的月份统计内容保留为一次历史运行示例，不代表当前默认题目。
 
 运行：
 
@@ -475,6 +500,15 @@ ORDER BY order_month;
 ```
 
 两种模型均得到 `2025-01` 至 `2025-05` 的正确订单数 `2、1、2、1、2`。LoRA 输出的字段别名、排序和 SQL 结构更贴近标准答案；耗时包含模型加载、系统缓存和 CPU 状态，只作为单次运行记录，不作为推理性能结论。
+
+**当前双题 Demo 实际运行结果**
+
+| 测试题 | 本地基础模型 | LoRA 微调模型 | 展示重点 |
+| --- | --- | --- | --- |
+| `test_user_order_count`：统计每位用户订单数 | SQL 可执行但结果错误 | SQL 可执行且结果正确 | 用户姓名、`LEFT JOIN`、分组和排序 |
+| `test_completed_product_revenue`：计算已完成订单中每个商品销售额 | SQL 可执行且结果正确 | SQL 可执行且结果正确 | `products`、`order_items`、`orders` 多表关联与销售额口径 |
+
+第二题中基础模型能够得到正确数值，但未显式按销售额排序；LoRA 使用商品主键和名称分组，并按销售额降序输出，更贴近标准 SQL 和业务展示要求。两道题分别体现微调正确性提升和多表 SQL 结构规范，不把单次耗时当作性能结论。
 
 #### 5.3 Agent 查询 Demo
 
@@ -523,6 +557,7 @@ python run_visualization.py
 outputs/evaluation_epoch1.json
 outputs/evaluation_epoch2.json
 outputs/evaluation_epoch3.json
+outputs/evaluation_fixed_epoch2.json
 outputs/evaluation_cspider_epoch2.json
 ```
 
@@ -535,7 +570,7 @@ ecommerce_data_agent/
 ├── run_demo.py              # IDE 一键启动 Streamlit Demo
 ├── streamlit_app.py         # 在线查询与微调对比页面
 ├── run_agent.py             # IDE 一键 Agent 入口
-├── run_compare.py           # IDE 一键 Base/LoRA 单题对比入口
+├── run_compare.py           # IDE 一键 Base/LoRA 双题对比入口
 ├── run_finetuning.py        # IDE 一键数据、训练和评估入口
 ├── run_visualization.py     # IDE 一键生成 Plotly 看板
 ├── app.py                   # 命令行、连续提问、自动图表和自检
@@ -556,6 +591,7 @@ ecommerce_data_agent/
 │   └── evaluate_cspider.py
 ├── data/
 │   ├── distillation/        # 候选数据和已验证训练集
+│   │   └── fixed_train_72.jsonl  # 严格 epoch 对比的固定训练快照
 │   ├── public/cspider/      # CSpider 目录说明，原始数据不提交
 │   ├── training/            # 固定合并训练快照
 │   └── evaluation/          # 电商与 CSpider 独立测试集
@@ -573,7 +609,7 @@ python visualization.py --self-test
 python -m streamlit run streamlit_app.py
 python scripts/generate_distillation_data.py --seed-only
 python scripts/prepare_evaluation_data.py
-python scripts/train_student.py --check-data
+python scripts/train_student.py --data-path data/distillation/fixed_train_72.jsonl --check-data
 python scripts/prepare_cspider.py --self-test
 python scripts/evaluate_cspider.py --self-test
 python -m compileall -q scripts app.py agent.py config.py database.py knowledge.py llm_client.py visualization.py run_agent.py run_compare.py run_demo.py run_finetuning.py run_visualization.py streamlit_app.py
@@ -596,17 +632,17 @@ python -m compileall -q scripts app.py agent.py config.py database.py knowledge.
 
 ### 2、项目局限
 
-- 电商独立测试集只有 12 条，75.00% 只代表本次小规模实验。
+- 电商独立测试集现为 24 条，历史 75.00% 指标仍只代表扩充前的 12 条小规模实验。
 - CSpider 默认使用固定子集和项目自建的轻量执行评测，不等同于官方全量榜单。
 - 业务知识只有 4 条关键词规则，不是向量数据库，换库后必须更新 Schema 和指标口径。
 - 1.5B 模型适合教学和 CPU 流程验证，复杂 SQL 能力仍有限。
 - 字符串级 SQL 安全检查不能替代只读权限、查询超时、审计和隔离环境。
 - API 会产生费用，并可能发送问题、上下文和查询结果，使用时需要考虑隐私。
-- 现有不同 epoch 实验的训练样本快照不完全一致，不能严格证明 epoch 与准确率的因果关系。
+- 固定 72/24 实验规模仍较小，epoch2 结果正确率为 58.33%，只能说明本地业务口径上的教学验证，不代表通用 Text-to-SQL 能力。
 
 ### 3、未来发展方向
 
-- 固定更大规模的训练快照，完成严格的 epoch、LoRA rank 和学习率对照实验。
+- 在固定 72/24 数据上完成 epoch 对比，再逐步增加 LoRA rank 和学习率单变量实验。
 - 增加复杂连接、子查询、窗口函数和多条件业务问题。
 - 使用 SQL AST 完成更可靠的只读检查和表字段白名单验证。
 - 增加只读数据库账号、查询超时、轨迹日志和可复现的错误分析报告。

@@ -3,9 +3,18 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
+
+# 本地 LoRA 权重和训练缓存，不上传模型参数。
 outputs/student_lora*/
+
+# 本地生成的图表、查询页面和临时输出。
 outputs/charts/
 outputs/powerbi/
+outputs/outputs/
+*.log
+.streamlit/
+
+# 可复现的评估报告不忽略，便于 GitHub Demo 直接读取。
 outputs/evaluation.json
 outputs/evaluation_epoch4.json
 data/public/cspider/raw/

@@ -1,4 +1,4 @@
-"""IDE 一键对比基础模型与 LoRA 在同一道测试题上的表现。"""
+"""IDE 一键对比基础模型与 LoRA 在两道独立测试题上的表现。"""
 
 import sys
 import time
@@ -15,11 +15,14 @@ from scripts.evaluate_finetuning import question_requires_order, release_client,
 
 # 留空时读取 .env 中的 LOCAL_MODEL_PATH。
 MODEL_PATH = ""
-ADAPTER_PATH = "outputs/student_lora_epoch2"
+ADAPTER_PATH = "outputs/student_lora_fixed_epoch2"
 TEST_PATH = "data/evaluation/test.jsonl"
 
-# 从独立测试集中选一题，避免使用训练题做演示。
-TEST_CASE_ID = "test_completed_month_count"
+# 从独立测试集中选择两题，避免使用训练题做演示。
+DEMO_CASE_IDS = (
+    "test_user_order_count",
+    "test_completed_product_revenue",
+)
 THREADS = 8
 MAX_NEW_TOKENS = 256
 ROOT = Path(__file__).resolve().parent
@@ -69,41 +72,18 @@ def print_model_result(result):
 
 
 def self_test():
-    record = select_record(read_jsonl(project_path(TEST_PATH)), TEST_CASE_ID)
-    assert record["id"] == TEST_CASE_ID
-    assert record["sql"].upper().startswith("SELECT")
-    print(f"对比入口自检通过：已找到独立测试题 {record['id']}。")
+    records = read_jsonl(project_path(TEST_PATH))
+    for case_id in DEMO_CASE_IDS:
+        record = select_record(records, case_id)
+        assert record["id"] == case_id
+        assert record["sql"].upper().startswith("SELECT")
+    print(f"对比入口自检通过：已找到 {len(DEMO_CASE_IDS)} 道独立测试题。")
 
 
-def main():
-    if "--self-test" in sys.argv:
-        self_test()
-        return
-
-    settings = get_settings()
-    configured_model_path = MODEL_PATH or settings.local_model_path
-    if not configured_model_path:
-        raise SystemExit("请填写 MODEL_PATH，或在 .env 中配置 LOCAL_MODEL_PATH。")
-    if not ADAPTER_PATH:
-        raise SystemExit("请填写已经训练完成的 ADAPTER_PATH。")
-    model_path = project_path(configured_model_path)
-    adapter_path = project_path(ADAPTER_PATH)
-    if not model_path.is_dir():
-        raise SystemExit("请填写 MODEL_PATH，或在 .env 中配置有效的 LOCAL_MODEL_PATH。")
-    if not adapter_path.is_dir():
-        raise SystemExit("ADAPTER_PATH 不是有效的 LoRA 目录，请填写已经训练完成的适配器路径。")
-
-    record = select_record(read_jsonl(project_path(TEST_PATH)), TEST_CASE_ID)
+def compare_record(record, settings, common, adapter_path, index, total):
     expected_columns, expected_rows, _ = execute_select(settings, record["sql"])
-    common = replace(
-        settings,
-        mode="local",
-        local_model_path=str(model_path),
-        local_threads=max(1, THREADS),
-        local_max_new_tokens=MAX_NEW_TOKENS,
-    )
 
-    print("===== 对比问题 =====")
+    print(f"\n{'=' * 12} 对比题 {index}/{total} {'=' * 12}")
     print(record["question"])
     print("\n===== 标准 SQL =====")
     print(format_sql(record["sql"]))
@@ -139,6 +119,37 @@ def main():
             ],
         )
     )
+
+
+def main():
+    if "--self-test" in sys.argv:
+        self_test()
+        return
+
+    settings = get_settings()
+    configured_model_path = MODEL_PATH or settings.local_model_path
+    if not configured_model_path:
+        raise SystemExit("请填写 MODEL_PATH，或在 .env 中配置 LOCAL_MODEL_PATH。")
+    if not ADAPTER_PATH:
+        raise SystemExit("请填写已经训练完成的 ADAPTER_PATH。")
+    model_path = project_path(configured_model_path)
+    adapter_path = project_path(ADAPTER_PATH)
+    if not model_path.is_dir():
+        raise SystemExit("请填写 MODEL_PATH，或在 .env 中配置有效的 LOCAL_MODEL_PATH。")
+    if not adapter_path.is_dir():
+        raise SystemExit("ADAPTER_PATH 不是有效的 LoRA 目录，请填写已经训练完成的适配器路径。")
+
+    records = read_jsonl(project_path(TEST_PATH))
+    common = replace(
+        settings,
+        mode="local",
+        local_model_path=str(model_path),
+        local_threads=max(1, THREADS),
+        local_max_new_tokens=MAX_NEW_TOKENS,
+    )
+
+    for index, case_id in enumerate(DEMO_CASE_IDS, start=1):
+        compare_record(select_record(records, case_id), settings, common, adapter_path, index, len(DEMO_CASE_IDS))
 
 
 if __name__ == "__main__":
