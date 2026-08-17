@@ -12,3 +12,4 @@ data/public/cspider/raw/
 data/public/cspider/processed/*.jsonl
 data/training/*.jsonl
 data/evaluation/cspider_dev.jsonl
+docs/
