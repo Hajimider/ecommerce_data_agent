@@ -187,20 +187,30 @@ def _query_figure(question, columns, rows, chart):
     return figure
 
 
-def export_query_chart(question, columns, rows, output_dir="outputs/charts/queries", open_browser=True):
-    """将一次 Agent 查询结果导出为独立 HTML，并按需自动打开。"""
+def build_query_figure(question, columns, rows):
+    """根据查询结果构建可直接嵌入页面的 Plotly 图表。"""
     if not rows or not any(value is not None for row in rows for value in row):
         raise ValueError("查询结果为空或只有 NULL，请检查 SQL 的筛选条件")
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
     chart = choose_query_chart(columns, rows)
     figure = _query_figure(question, columns, rows, chart)
-    figure.update_layout(title_text=question, template="plotly_white", margin={"l": 60, "r": 30, "t": 80, "b": 60})
+    figure.update_layout(
+        title_text=question,
+        template="plotly_white",
+        margin={"l": 60, "r": 30, "t": 80, "b": 60},
+    )
+    return figure, {"kind": chart["kind"], "name": QUERY_CHART_NAMES[chart["kind"]]}
+
+
+def export_query_chart(question, columns, rows, output_dir="outputs/charts/queries", open_browser=True):
+    """将一次 Agent 查询结果导出为独立 HTML，并按需自动打开。"""
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    figure, chart = build_query_figure(question, columns, rows)
     chart_path = output_path / f"query_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.html"
     figure.write_html(chart_path, full_html=True, include_plotlyjs="directory")
     if open_browser:
         _open_dashboard(chart_path)
-    return {"path": str(chart_path), "kind": chart["kind"], "name": QUERY_CHART_NAMES[chart["kind"]]}
+    return {"path": str(chart_path), **chart}
 
 
 def _query(settings, sql, params=()):
@@ -292,6 +302,13 @@ def self_test():
     assert indicator.title.text == "平均订单金额"
     assert indicator.number.prefix == "¥" and indicator.number.valueformat == ",.2f"
     assert choose_query_chart(["product_name"], [["显示器"]])["kind"] == "table"
+    figure, chart = build_query_figure(
+        "测试分类销售额",
+        ["category", "sales"],
+        [["办公设备", Decimal("100")], ["手机配件", Decimal("80")]],
+    )
+    assert chart == {"kind": "bar", "name": "柱状图"}
+    assert figure.layout.title.text == "测试分类销售额"
     try:
         export_query_chart("空指标", ["average_amount"], [[None]], open_browser=False)
     except ValueError:

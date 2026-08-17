@@ -1,5 +1,7 @@
 PyMySQL>=1.1,<2
 truststore>=0.10,<1
+streamlit>=1.57,<2
+pandas>=2.2,<4
 # 仅本地模型模式需要以下依赖。
 torch>=2.4,<3
 transformers>=5.0,<6

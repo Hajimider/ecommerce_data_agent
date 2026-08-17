@@ -26,7 +26,7 @@
 
 - **支持本地与 API 切换**：本地模式用于验证 LoRA，API 模式用于可选的数据生成、自动审核和能力参考。
 
-- **便于 Demo 展示**：查询成功后自动生成并打开 Plotly 图表，可展示从自然语言到分析结论的完整过程。
+- **便于 Demo 展示**：提供 Streamlit 浏览器页面，并支持查询成功后自动生成 Plotly 图表。
 
 ### 3、主要功能
 
@@ -40,6 +40,17 @@
 - API 模型与本地 Qwen/LoRA 模型切换。
 - SQL 多行格式化、结果表格和中文分析结论输出。
 - 根据查询结果自动选择柱状图、折线图、饼图、散点图、指标卡或数据表。
+- Streamlit 页面直接展示在线查询、执行结果、自动图表和微调前后指标。
+
+**核心实验结果**
+
+| 模型 | 执行结果正确率 | SQL 可执行率 | Agent 首次成功率 |
+| --- | ---: | ---: | ---: |
+| 本地基础模型 | 33.33% | 91.67% | 83.33% |
+| 最佳 LoRA 模型 | 75.00% | 91.67% | 91.67% |
+| 变化 | +41.67 个百分点 | 0.00 个百分点 | +8.34 个百分点 |
+
+以上结果来自固定的 12 条电商独立测试题。该规模适合教学验证，不代表模型在其他数据库上的通用水平。
 
 **Agent 运行效果示意**
 
@@ -119,6 +130,24 @@ python visualization.py --self-test
 python run_agent.py
 ```
 
+**启动浏览器 Demo**
+
+```shell
+python run_demo.py
+```
+
+也可以使用通用 Streamlit 命令启动：
+
+```shell
+python -m streamlit run streamlit_app.py
+```
+
+**一键对比基础模型与 LoRA**
+
+```shell
+python run_compare.py
+```
+
 **启动微调流程入口**
 
 ```shell
@@ -147,6 +176,7 @@ python run_visualization.py
     - [√] 单个 Text-to-SQL Agent 与本地/API 双后端。
     - [√] 查询结果自动选择 Plotly 图表并打开本地 HTML。
     - [√] 金额指标卡中文标题、货币符号和两位小数格式。
+    - [√] Streamlit 在线查询与微调效果对比 Demo。
 
 - **后续可扩展方向**
 
@@ -304,6 +334,18 @@ API 教师不是同一基础模型，不能用于严格判断 LoRA 的提升。�
 
 该结果说明小规模混合训练只带来了有限的公开集正确率提升，同时 SQL 可执行率下降，不能宣称泛化能力显著提高。典型错误仍包括字段幻觉、关联遗漏、聚合条件错误和 SQLite/MySQL 函数混用。
 
+#### 3.4 典型错误分析
+
+| 模型 | 典型错误 | 影响 |
+| --- | --- | --- |
+| 基础模型 | 将中文状态“退款中”“已完成”生成成 `refunded`、`completed` | SQL 可以执行但返回错误结果 |
+| 基础模型 | 将销量 `SUM(quantity)` 错写为明细行数 `COUNT(item_id)` | 聚合口径错误 |
+| 基础模型 | 将分组聚合条件写成普通 `WHERE` | 无法正确筛选累计金额 |
+| LoRA 模型 | 复杂关联时偶尔引用不存在的表别名 | SQL 执行失败 |
+| LoRA 模型 | 将库存金额误解为历史销售额 | 业务指标口径混淆 |
+
+错误分析来自现有 `evaluation_epoch*.json` 报告，不额外编造测试结果。LoRA 明显改善了中文状态、表关系和常见聚合，但复杂聚合与业务口径仍是主要优化方向。
+
 ### 4、单个 Text-to-SQL Agent
 
 #### 4.1 业务知识检索
@@ -365,7 +407,76 @@ Agent 会在终端依次输出检索到的知识、格式化 SQL、查询结果�
 
 ### 5、Demo 展示
 
-#### 5.1 Agent 查询 Demo
+#### 5.1 浏览器 Demo
+
+直接运行 `run_demo.py`，浏览器会打开 Streamlit 页面：
+
+```shell
+python run_demo.py
+```
+
+页面包含两个视图：
+
+- **在线查询**：选择 LoRA、本地基础模型或 API 模型，输入自然语言问题后展示格式化 SQL、MySQL 查询结果、中文结论、业务知识来源和自动图表。
+- **微调对比**：直接读取已有评估报告，展示基础模型与 LoRA 的执行结果正确率、SQL 可执行率、Agent 首次成功率和单题 SQL 对比，无需现场重新训练。
+
+本地模型和 LoRA 路径、API 配置以及 MySQL 连接信息统一从 `.env` 读取。页面同一时间只缓存一个模型后端，切换模型时不会主动让基础模型与 LoRA 同时常驻内存。
+
+#### 5.2 微调前后对比 Demo
+
+`run_compare.py` 从现有独立测试集中选择一道题，依次运行基础模型和 LoRA。程序会展示标准 SQL、标准执行结果、两种模型的预测 SQL、执行结果、正确性和耗时。
+
+```python
+MODEL_PATH = ""  # 留空时读取 .env
+ADAPTER_PATH = "outputs/student_lora_epoch2"
+TEST_CASE_ID = "test_completed_month_count"
+```
+
+运行：
+
+```shell
+python run_compare.py
+```
+
+基础模型执行完成并释放内存后才会加载 LoRA，不会让两个 1.5B 模型同时驻留内存。该入口只测试一题，适合现场展示，不替代完整评估报告。
+
+**本次实际运行示例**
+
+问题：`按月份统计已完成订单数`
+
+| 对比项 | 本地基础模型 | LoRA 微调模型 |
+| --- | --- | --- |
+| SQL 可执行 | 是 | 是 |
+| 执行结果正确 | 是 | 是 |
+| SQL 完整性 | 缺少显式 `ORDER BY`，字段别名不同 | 与标准 SQL 一致 |
+| 本次运行耗时 | 117.33 秒 | 24.86 秒 |
+
+基础模型 SQL：
+
+```sql
+SELECT
+    DATE_FORMAT(order_date, '%Y-%m') AS month,
+    COUNT(*) AS complete_orders
+FROM orders
+WHERE status = '已完成'
+GROUP BY month;
+```
+
+LoRA 微调模型 SQL：
+
+```sql
+SELECT
+    DATE_FORMAT(order_date, '%Y-%m') AS order_month,
+    COUNT(*) AS order_count
+FROM orders
+WHERE status = '已完成'
+GROUP BY order_month
+ORDER BY order_month;
+```
+
+两种模型均得到 `2025-01` 至 `2025-05` 的正确订单数 `2、1、2、1、2`。LoRA 输出的字段别名、排序和 SQL 结构更贴近标准答案；耗时包含模型加载、系统缓存和 CPU 状态，只作为单次运行记录，不作为推理性能结论。
+
+#### 5.3 Agent 查询 Demo
 
 修改 `run_agent.py` 中的测试问题，然后直接运行：
 
@@ -394,7 +505,7 @@ python run_agent.py
 
 设置 `QUESTION = ""` 后进入连续提问模式。每次成功查询都会在 `outputs/charts/queries/` 生成独立 HTML，并按配置自动打开。
 
-#### 5.2 固定业务看板 Demo
+#### 5.4 固定业务看板 Demo
 
 运行：
 
@@ -404,7 +515,7 @@ python run_visualization.py
 
 程序将 5 个固定业务指标合并到 `outputs/charts/dashboard.html`，包括分类销售额、城市销售额、订单状态、库存价值和月度销售趋势。
 
-#### 5.3 微调效果 Demo
+#### 5.5 微调效果 Demo
 
 现场展示不需要重新训练模型。推荐直接打开以下报告，对比基础模型与 LoRA：
 
@@ -421,7 +532,10 @@ outputs/evaluation_cspider_epoch2.json
 
 ```text
 ecommerce_data_agent/
+├── run_demo.py              # IDE 一键启动 Streamlit Demo
+├── streamlit_app.py         # 在线查询与微调对比页面
 ├── run_agent.py             # IDE 一键 Agent 入口
+├── run_compare.py           # IDE 一键 Base/LoRA 单题对比入口
 ├── run_finetuning.py        # IDE 一键数据、训练和评估入口
 ├── run_visualization.py     # IDE 一键生成 Plotly 看板
 ├── app.py                   # 命令行、连续提问、自动图表和自检
@@ -454,13 +568,15 @@ ecommerce_data_agent/
 
 ```shell
 python app.py --self-test
+python run_compare.py --self-test
 python visualization.py --self-test
+python -m streamlit run streamlit_app.py
 python scripts/generate_distillation_data.py --seed-only
 python scripts/prepare_evaluation_data.py
 python scripts/train_student.py --check-data
 python scripts/prepare_cspider.py --self-test
 python scripts/evaluate_cspider.py --self-test
-python -m compileall -q scripts app.py agent.py config.py database.py knowledge.py llm_client.py visualization.py run_agent.py run_finetuning.py run_visualization.py
+python -m compileall -q scripts app.py agent.py config.py database.py knowledge.py llm_client.py visualization.py run_agent.py run_compare.py run_demo.py run_finetuning.py run_visualization.py streamlit_app.py
 ```
 
 当前自检覆盖知识检索、业务状态值、只读 SQL 规范化、危险操作拒绝、SQL 多行排版、训练数据结构、公开数据转换、自动选图和金额指标卡格式。
@@ -476,7 +592,7 @@ python -m compileall -q scripts app.py agent.py config.py database.py knowledge.
 3. 使用独立数据库执行结果评估 Base 与 LoRA，而不是只观察训练损失。
 4. 使用可选 API 教师扩充问法，并通过 API 裁判和 SQL 执行过滤数据。
 5. 使用单个 Text-to-SQL Agent 完成模型能力落地，避免不必要的多 Agent 编排。
-6. 使用 Plotly 自动生成可交互图表，形成可现场展示的完整分析链路。
+6. 使用 Streamlit 与 Plotly 展示查询、SQL、结果、图表和微调前后指标，形成可现场演示的完整分析链路。
 
 ### 2、项目局限
 
@@ -494,7 +610,7 @@ python -m compileall -q scripts app.py agent.py config.py database.py knowledge.
 - 增加复杂连接、子查询、窗口函数和多条件业务问题。
 - 使用 SQL AST 完成更可靠的只读检查和表字段白名单验证。
 - 增加只读数据库账号、查询超时、轨迹日志和可复现的错误分析报告。
-- 在不改变微调主线的前提下，增加轻量 Web Demo 展示查询、SQL、结果和图表。
+- 将 Streamlit Demo 部署为可公开访问的临时演示地址，避免面试展示依赖本机环境。
 
 ## 五、参考资料与致谢
 
@@ -507,6 +623,7 @@ python -m compileall -q scripts app.py agent.py config.py database.py knowledge.
 - [MySQL](https://dev.mysql.com/doc/)
 - [PyMySQL](https://pymysql.readthedocs.io/)
 - [Plotly](https://plotly.com/python/)
+- [Streamlit](https://streamlit.io/)
 - [CSpider](https://github.com/taolusi/chisp)
 
 本项目用于大模型微调、Text-to-SQL 和算法工程实践，不构成真实经营决策建议，也不应直接连接生产数据库。
